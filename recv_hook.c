@@ -153,11 +153,9 @@ ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
         }
     }
     if (flag_recvmsg == 1) {
-        printf("hooked\n");
         read_from_afl();
-        printf("hrere\n");
         int total_bytes_received = 0;
-        for (int i; i < msg->msg_iovlen; i++) {
+        for (int i=0; i < msg->msg_iovlen; i++) {
             total_bytes_received += msg->msg_iov[i].iov_len;
             if (fp == NULL) {
                 fp = fopen(FILENAME, "rb");
@@ -182,12 +180,11 @@ ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
                 fclose(fp);
                 printf("current seed done.\n");
                 fp = NULL;
+                usleep(100000);
+                send_to_afl();
             }
         }
-        usleep(100000);
-        send_to_afl();
-        printf("send\n");
-        return msg->msg_iov->iov_len;  
+        return total_bytes_received;  
     }
 }
 void send_to_afl() {

@@ -138,12 +138,11 @@ ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
         iov[0].iov_len = 4;
         my_msg.msg_iov = iov;
         my_msg.msg_iovlen = 1;
-        ssize_t bytesReceived =
-            original_recvmsg(sockfd, &my_msg, MSG_DONTWAIT | MSG_PEEK);
+        ssize_t bytesReceived =original_recvmsg(sockfd, &my_msg, MSG_DONTWAIT | MSG_PEEK);
         buffer[4] = '\0';
         //printf("original_recvmsg called bytesReceived=%ld %#08x, %d\n",
          //   bytesReceived, *(int*)(buffer), buffer[1]);
-        printf("%s\n", buffer);
+        //printf("%s\n", buffer);
         if (strncmp(buffer, "hook", 4) == 0) {
             printf("flag_recvmsg==1\n");
             flag_recvmsg = 1;
@@ -154,6 +153,14 @@ ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
         }
     }
     if (flag_recvmsg == 1) {
+
+        if (feof(fp)) {   //check current seed whether have been done
+            fclose(fp);
+            printf("current seed done.\n");
+            fp = NULL;
+            send_to_afl()
+        }
+
         read_from_afl();
         int total_bytes_received = 0;
         for (int i=0; i < msg->msg_iovlen; i++) {
@@ -178,14 +185,16 @@ ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
                 fread(msg->msg_iov[i].iov_base, msg->msg_iov[i].iov_len, 1, fp);
             }
             if (feof(fp)) {
-                fclose(fp);
+                return total_bytes_received;
+                /*fclose(fp);
                 printf("current seed done.\n");
                 fp = NULL;
                 usleep(100000);
-                send_to_afl();
+                send_to_afl();*/
+                
             }
         }
-        return total_bytes_received;  
+      
     }
 }
 void send_to_afl() {

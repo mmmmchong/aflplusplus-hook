@@ -126,8 +126,8 @@ ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
     printf("recvmsg, msg.msg_iovlen=%ld, msg.msg_iov[0].iov_len=%ld \n", msg->msg_iovlen,
         msg->msg_iov[0].iov_len);
     char buffer[5];
-    int isNetworkSocket = sd_is_socket(sockfd, AF_UNSPEC, SOCK_DGRAM | SOCK_STREAM, 1);
-    if (isNetworkSocket) {
+    int isNetworkSocket = sd_is_socket(sockfd, AF_UNSPEC, 0 , 0);
+    if (!isNetworkSocket) {
         printf("not network:%d\n",isNetworkSocket);
         return original_recvmsg(sockfd, msg, flags);
     }
@@ -143,6 +143,7 @@ ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
         buffer[4] = '\0';
         //printf("original_recvmsg called bytesReceived=%ld %#08x, %d\n",
          //   bytesReceived, *(int*)(buffer), buffer[1]);
+        printf("%s\n", buffer);
         if (strncmp(buffer, "hook", 4) == 0) {
             printf("flag_recvmsg==1\n");
             flag_recvmsg = 1;

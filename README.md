@@ -2,7 +2,7 @@
 
 ### 目前的输出：
 
-bitmap不存在
+可以正常运行，执行速度飞快，但是bitmap长度似乎有点问题
 
 **7.11更新**
 
@@ -25,3 +25,20 @@ bitmap不存在
 并且afl需要forkserver的执行情况，所以我们每次send_to_afl的时候forkserver必须处理完，所以它必须有hook的recvmsg的返回值
 
 所以我把send_to_afl的操作直接放在下一次recvmsg触发的时候，这样理论上不需要usleep()。
+
+**7.13更新**
+
+1.注意到iovec *msg_iov中的iov_base的类型为void\*是一个未定类型的指针，所以无法直接用fread赋值，采用了buffer复制过去的方法.
+
+2.加入了对剩余文件长度的判断
+
+3.昨天考虑的第三点实现起来不太好，可能由于阻塞时间过长，afl会出一点问题（今天发现如果在一些地方加usleep afl也会报错）
+
+所以还是采用了之前的usleep的方法
+
+4.打印了一堆东西才知道是种子没有写。。。注释掉write_to_testcase中的retn程序可以运行（总算可以正常跑了
+
+**TODO:attachPUT观察路径，寻找bitmap的长度问题**
+
+
+

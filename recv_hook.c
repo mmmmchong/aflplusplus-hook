@@ -123,8 +123,8 @@ ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
     if (!original_recvmsg) {
         original_recvmsg = (orig_recvmsg_func_type)dlsym(RTLD_NEXT, "recvmsg");
     }
-    printf("recvmsg, msg.msg_iovlen=%ld, msg.msg_iov[0].iov_len=%ld \n", msg->msg_iovlen,
-        msg->msg_iov[0].iov_len);
+    //printf("recvmsg, msg.msg_iovlen=%ld, msg.msg_iov[0].iov_len=%ld \n", msg->msg_iovlen,
+    //    msg->msg_iov[0].iov_len);
     char buffer[5];
     int isNetworkSocket = sd_is_socket(sockfd, AF_UNSPEC, 0 , 0);
     if (!isNetworkSocket) {
@@ -153,18 +153,9 @@ ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
         }
     }
     if (flag_recvmsg == 1) {
-
-        if (feof(fp)) {   //check current seed whether have been done
-            fclose(fp);
-            printf("current seed done.\n");
-            fp = NULL;
-            send_to_afl()
-        }
-
-        read_from_afl();
         int total_bytes_received = 0;
         for (int i=0; i < msg->msg_iovlen; i++) {
-            total_bytes_received += msg->msg_iov[i].iov_len;
+            //printf("iov_len:%ld\n", msg->msg_iov[i].iov_len);
             if (fp == NULL) {
                 fp = fopen(FILENAME, "rb");
                 fseek(fp, 24, SEEK_SET);
@@ -177,24 +168,39 @@ ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
             fseek(fp, 0, SEEK_END);
             long totalLength = ftell(fp); 
             long distanceToEnd = totalLength - currentPosition;
+            //printf("file_lenth:%d\n", distanceToEnd);
             fseek(fp, currentPosition, SEEK_SET);
             if (distanceToEnd < msg->msg_iov[i].iov_len) {
-                fread(msg->msg_iov[i].iov_base,distanceToEnd, 1, fp);
+                size_t buffer_size = distanceToEnd;
+                char  *buffer = malloc(buffer_size);
+                size_t bytes_read =fread(buffer, sizeof(char), buffer_size, fp);
+                //printf("buffer:%s\n", buffer);
+                total_bytes_received +=bytes_read ;
+                memcpy(msg->msg_iov[i].iov_base, buffer, buffer_size);
+                //printf("msg:%s\n", msg->msg_iov[i].iov_base);
+                //fread(msg->msg_iov[i].iov_base,distanceToEnd, 1, fp);
             }
             else {
-                fread(msg->msg_iov[i].iov_base, msg->msg_iov[i].iov_len, 1, fp);
+                size_t buffer_size = msg->msg_iov[i].iov_len;
+                char  *buffer = malloc(buffer_size);
+                size_t bytes_read =fread(buffer, sizeof(char), buffer_size, fp);
+                //printf("buffer:%s\n", buffer);
+                total_bytes_received += bytes_read;
+                memcpy(msg->msg_iov[i].iov_base, buffer, buffer_size);
+                //printf("msg:%s\n", msg->msg_iov[i].iov_base);
             }
-            if (feof(fp)) {
-                return total_bytes_received;
-                /*fclose(fp);
-                printf("current seed done.\n");
+            
+            if (distanceToEnd<=0) {
+                fclose(fp);
+                //printf("current seed done.\n");
                 fp = NULL;
-                usleep(100000);
-                send_to_afl();*/
-                
+                //usleep(100000);
+                send_to_afl();
+                usleep(10000);
+                read_from_afl();
             }
         }
-      
+        return total_bytes_received;  
     }
 }
 void send_to_afl() {
@@ -204,6 +210,7 @@ void send_to_afl() {
         //_exit(1);
 
     }
+    //printf("send success\n");
 }
 void read_from_afl() {
     char buf[4];
@@ -212,7 +219,9 @@ void read_from_afl() {
         perror("Don't recv hello?(OOM?)read_from_afl:");
         //_exit(1);
     }
-}  int close(int fd) {
+    //printf("read success\n");
+}  
+int close(int fd) {
     if (fd == FORKSRV_FD + 3 || fd == FORKSRV_FD + 4) {
         return 0;
     }

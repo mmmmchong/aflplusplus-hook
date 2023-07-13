@@ -20,11 +20,11 @@
 
 (b):种子长度大于总的iov长度，应该填满当前iov，并且完成一次返回，下一个全新的iov来接着读种子
 
-基于上述想法send_to_afl()应该在每次种子读完，即feof(fp)时触发，并且read_from_afl()应保持同步
+~~基于上述想法send_to_afl()应该在每次种子读完，即feof(fp)时触发，并且read_from_afl()应保持同步~~
 
-并且afl需要forkserver的执行情况，所以我们每次send_to_afl的时候forkserver必须处理完，所以它必须有hook的recvmsg的返回值
+~~并且afl需要forkserver的执行情况，所以我们每次send_to_afl的时候forkserver必须处理完，所以它必须有hook的recvmsg的返回值~~
 
-所以我把send_to_afl的操作直接放在下一次recvmsg触发的时候，这样理论上不需要usleep()。
+~~所以我把send_to_afl的操作直接放在下一次recvmsg触发的时候，这样理论上不需要usleep()。~~
 
 **7.13更新**
 

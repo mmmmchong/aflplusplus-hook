@@ -40,5 +40,21 @@
 
 **TODO:attachPUT观察路径，寻找bitmap的长度问题**
 
+**7.16更新**
 
+1.加入timer控制效果不理想，速度仅为140/sec左右
+
+2.dbg动调发现在dnsmasq的forward.c中receive_query line 1517
+
+```c
+  if ((n = recvmsg(listen->fd, &msg, 0)) == -1)
+    return;
+
+  if (n < (int)sizeof(struct dns_header) || 
+      (msg.msg_flags & MSG_TRUNC) ||
+      (header->hb3 & HB3_QR))
+    return;
+```
+
+到了这里就直接返回，可我打印查看recvmsg的返回值确实有大于0的，但是基本上都在n<0那边retn了，不知道为啥
 

@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include <dlfcn.h>
+#include<time.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -118,6 +119,7 @@ typedef ssize_t(*orig_recvmsg_func_type)(int sockfd, struct msghdr* msg, int fla
 //original recvmsg
 static orig_recvmsg_func_type original_recvmsg = NULL;
 //check if recvmsg() exists
+timer_t timer;
 ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
 {
     if (!original_recvmsg) {
@@ -195,11 +197,23 @@ ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
                 //printf("current seed done.\n");
                 fp = NULL;
                 //usleep(100000);
-                send_to_afl();
-                usleep(10000);
+                struct sigevent   sev;
+                struct itimerspec its;
+                signal(SIGALRM, send_to_afl);
+                sev.sigev_notify = SIGEV_SIGNAL;
+                sev.sigev_signo = SIGALRM;
+                sev.sigev_value.sival_ptr = &timer;
+                timer_create(CLOCK_REALTIME, &sev, &timer);
+                its.it_interval.tv_sec = 0;
+                its.it_interval.tv_nsec = 0;
+                its.it_value.tv_sec = 0;
+                its.it_value.tv_nsec = 10000;  
+                timer_settime(timer, 0, &its, NULL);
                 read_from_afl();
+                timer_delete(timer);
             }
         }
+        printf("%d\n", total_bytes_received);
         return total_bytes_received;  
     }
 }

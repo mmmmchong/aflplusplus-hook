@@ -56,11 +56,13 @@ fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
   }
 
 #endif
-
+   u32               max_bitsize = 0;
   fsrv_run_result_t res = afl_fsrv_run_target(fsrv, timeout, &afl->stop_soon);
   //add
-  //u32               test_bitmap_size = count_bytes(afl, afl->fsrv.trace_bits);
-  //printf("%u\n", test_bitmap_size);
+  u32               test_bitmap_size = count_bytes(afl, afl->fsrv.trace_bits);
+  if (test_bitmap_size > max_bitsize) { max_bitsize = test_bitmap_size;
+  }
+  printf("max_bitmap_size:%u\n", max_bitsize);
   //add
 #ifdef PROFILING
   clock_gettime(CLOCK_REALTIME, &spec);

@@ -440,7 +440,6 @@ void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
 
     fsrv->trace_bits =
         fsrv->nyx_handlers->nyx_get_bitmap_buffer(fsrv->nyx_runner);
-
     fsrv->nyx_handlers->nyx_option_set_reload_mode(
         fsrv->nyx_runner, getenv("NYX_DISABLE_SNAPSHOT_MODE") == NULL);
     fsrv->nyx_handlers->nyx_option_apply(fsrv->nyx_runner);
@@ -1289,7 +1288,7 @@ void afl_fsrv_write_to_testcase(afl_forkserver_t *fsrv, u8 *buf, size_t len) {
     //zyp
   testcase_buf = buf;
   testcase_len = len;
-  return;
+  //return;
 
 #ifdef __linux__
   if (unlikely(fsrv->nyx_mode)) {
@@ -1612,7 +1611,6 @@ fsrv_run_result_t afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
   s32 res;
   u32 exec_ms;
   u32 write_value = fsrv->last_run_timed_out;
-
 #ifdef __linux__
   if (fsrv->nyx_mode) {
 
@@ -1780,7 +1778,7 @@ fsrv_run_result_t afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
       perror("Don't recv hello?(OOM?)\n");
       _exit(1);
       }*/
-      char buf[4];
+       char buf[4];
       if ((check_send = read(recv_pipe[0], buf, 4)) != 4) {
       WARNF("don't recv from hook ");
       }

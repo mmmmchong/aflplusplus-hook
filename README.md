@@ -42,9 +42,9 @@
 
 **7.16更新**
 
-1.加入timer控制效果不理想，速度仅为140/sec左右
+~~1.加入timer控制效果不理想，速度仅为140/sec左右~~
 
-2.dbg动调发现在dnsmasq的forward.c中receive_query line 1517
+~~2.dbg动调发现在dnsmasq的forward.c中receive_query line 1517~~
 
 ```c
   if ((n = recvmsg(listen->fd, &msg, 0)) == -1)
@@ -56,6 +56,37 @@
     return;
 ```
 
-到了这里就直接返回，可我打印查看recvmsg的返回值确实有大于0的，但是基本上都在n<0那边retn了，不知道为啥
+~~到了这里就直接返回，可我打印查看recvmsg的返回值确实有大于0的，但是基本上都在n<0那边retn了，不知道为啥~~
 
-对于这个问题现在想的是hook部分肯定有问题，不然也不会出现那么多返回值为0的
+~~对于这个问题现在想的是hook部分肯定有问题，不然也不会出现那么多返回值为0的~~
+
+~~观察了一下发现recvmsg的返回值不应该是0的，但是dnsmasq那边就是直接retn了，不知道咋回事~~
+
+~~bitmap正确路径~~
+
+~~receive_query-check_dns_listeners- 1844-1854-1857-2032-1838-1857-2032-1838-2041-check_dns_listeners~~
+
+~~1265~~
+
+~~hit twice~~ 
+
+**7.24更新**
+
+1.之前的理解有误，首先在
+
+```c
+  if ((n = recvmsg(listen->fd, &msg, 0)) == -1)
+    return;
+      if (n < (int)sizeof(struct dns_header) || 
+      (msg.msg_flags & MSG_TRUNC) ||
+      (header->hb3 & HB3_QR))
+    return;
+```
+
+这里的退出时因为长度
+
+后面在`indextoname`的退出为正常
+
+2.之前的判断有误，第一次bitmap500+的原因是第一次包含了程序启动时的代码，而后面的不包括
+
+3.修复了返回bytes为0的bug

@@ -155,6 +155,27 @@ ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
         }
     }
     if (flag_recvmsg == 1) {
+        /* if (msg->msg_flags & MSG_TRUNC) {
+            printf("Received message is truncated.\n");
+        } else {
+            printf("Received message is complete.\n");
+        }*/
+        /*
+        struct sockaddr_storage addr;
+        socklen_t               addr_len = sizeof(addr);
+        if (getsockname(sockfd, (struct sockaddr *)&addr, &addr_len) < 0) {
+            perror("getsockname failed");
+            close(sockfd);
+            
+        }
+        if (addr.ss_family == AF_INET) {
+            printf("The socket is using IPv4.\n");
+        } else if (addr.ss_family == AF_INET6) {
+            printf("The socket is using IPv6.\n");
+        } else {
+            printf("Unknown address family.\n");
+        }
+        */
         int total_bytes_received = 0;
         for (int i=0; i < msg->msg_iovlen; i++) {
             //printf("iov_len:%ld\n", msg->msg_iov[i].iov_len);
@@ -170,7 +191,7 @@ ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
             fseek(fp, 0, SEEK_END);
             long totalLength = ftell(fp); 
             long distanceToEnd = totalLength - currentPosition;
-            //printf("file_lenth:%d\n", distanceToEnd);
+            printf("file_lenth:%ld\n", distanceToEnd);
             fseek(fp, currentPosition, SEEK_SET);
             if (distanceToEnd < msg->msg_iov[i].iov_len) {
                 size_t buffer_size = distanceToEnd;
@@ -191,10 +212,11 @@ ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
                 memcpy(msg->msg_iov[i].iov_base, buffer, buffer_size);
                 //printf("msg:%s\n", msg->msg_iov[i].iov_base);
             }
-            
+            currentPosition = ftell(fp);
+            distanceToEnd = totalLength - currentPosition;
             if (distanceToEnd<=0) {
                 fclose(fp);
-                //printf("current seed done.\n");
+                printf("current seed done.\n");
                 fp = NULL;
                 //usleep(100000);
                 struct sigevent   sev;
@@ -213,7 +235,8 @@ ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
                 timer_delete(timer);
             }
         }
-        printf("%d\n", total_bytes_received);
+       
+        printf("total_bytes_received:%d\n", total_bytes_received);
         return total_bytes_received;  
     }
 }

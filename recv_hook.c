@@ -20,8 +20,9 @@ void read_from_afl();
 #define FILENAME   "finding_dir/default/.cur_input"
 int status;
 const u_char* packet_data;
+timer_t       timer; // register timer
 static int flag_recvmsg = 0;
-static int flag_recvfrom = 0;
+
 static int flag_recv = 0;
 typedef ssize_t(*orig_recv_func_type)(int sockfd, void* buf, size_t len, int flags);
 orig_recv_func_type original_recv = NULL;
@@ -71,55 +72,81 @@ ssize_t recv(int sockfd, void* buf, size_t len, int flags) {
     }
     return original_recv(sockfd, buf, len, flags);
 }
-
-//check if magic characters has been received
-/*typedef ssize_t(*recvfrom_t)(int sockfd, void* buf, size_t len, int flags,
+static int flag_recvfrom = 0;
+typedef ssize_t(*recvfrom_t)(int sockfd, void* buf, size_t len, int flags,
     struct sockaddr* src_addr, socklen_t* addrlen);
-//original recvfrom
 static recvfrom_t original_recvfrom = NULL;
 ssize_t recvfrom(int sockfd, void* buf, size_t len, int flags,
     struct sockaddr* src_addr, socklen_t* addrlen) {
-    //check if recvfrom() exists
     if (original_recvfrom == NULL) {
-        //get original recvfrom()
         original_recvfrom = dlsym(RTLD_NEXT, "recvfrom");
     }
-    //define my own magic characters
-    char* buffer[len];
-    printf("here");
-    ssize_t ret = original_recvfrom(sockfd, buffer, len, MSG_PEEK,
-        src_addr, addrlen);
-
-    if (ret >= 4 && !flag_recv) {
-        if (ret >= 4 && strncmp(buffer, "hook", 4) == 0) {
-            flag_recv = 1;
-        }
+    int isNetworkSocket = sd_is_socket(sockfd, AF_UNSPEC, 0, 0);
+    if (!isNetworkSocket) {
+        printf("not network:%d\n", isNetworkSocket);
+        return original_recvfrom(sockfd, buf, len, flags, src_addr, addrlen);
     }
-    if (flag_recv) {
-        printf("here\n");
-        read_from_afl();
+    if (flag_recvfrom==0) {
+        char buffer[4];
+        if (len >= 4) {
+            ssize_t ret = original_recvfrom( sockfd, buffer, 4, MSG_PEEK | MSG_DONTWAIT, src_addr, addrlen);
+            if (strncmp(buffer, "hook", 4) == 0) { 
+                flag_recvfrom = 1;
+                return 4;            
+            }
+        }
+        return original_recvfrom(sockfd, buf, len, flags, src_addr, addrlen);
+       
+    }
+    if (flag_recvfrom==1) {
         if (fp == NULL) {
             fp = fopen(FILENAME, "rb");
             fseek(fp, 24, SEEK_SET);
-            send_to_afl();
             if (fp == NULL) {
                 perror("Could not open pcap file: %s\n");
                 return 1;
             }
         }
-
-
+        int  total_bytes_received = 0;
+        long currentPosition = ftell(fp);  // check file lenth
+        fseek(fp, 0, SEEK_END);
+        long totalLength = ftell(fp);
+        long distanceToEnd = totalLength - currentPosition;
+        // printf("file_lenth:%ld\n", distanceToEnd);
+        fseek(fp, currentPosition, SEEK_SET);
+     
+        if (distanceToEnd <= len) {
+             total_bytes_received= read(fileno(fp), buf, len);    
+        }
+        else
+        {
+             total_bytes_received = read(fileno(fp), buf, distanceToEnd); 
+        }
+        fclose(fp);
+        // printf("current seed done.\n");
+        fp = NULL;
+        struct sigevent   sev;
+        struct itimerspec its;
+        signal(SIGALRM, send_to_afl);
+        sev.sigev_notify = SIGEV_SIGNAL;
+        sev.sigev_signo = SIGALRM;
+        sev.sigev_value.sival_ptr = &timer;
+        timer_create(CLOCK_REALTIME, &sev, &timer);
+        its.it_interval.tv_sec = 0;
+        its.it_interval.tv_nsec = 0;
+        its.it_value.tv_sec = 0;
+        its.it_value.tv_nsec = 10000;
+        timer_settime(timer, 0, &its, NULL);
+        read_from_afl();
+        timer_delete(timer);
+        return total_bytes_received;
     }
-    return original_recvfrom(sockfd, buf, len, flags, src_addr, addrlen);
-}*/
-//TODO: sd判断socket
-//TODO: 注意msg长度，在种子都完成之后向AFL要下一个种子
-//TODO: 1ms之后向afl发送完成消息
+
+}
+
 typedef ssize_t(*orig_recvmsg_func_type)(int sockfd, struct msghdr* msg, int flags);
 //original recvmsg
 static orig_recvmsg_func_type original_recvmsg = NULL;
-//check if recvmsg() exists
-timer_t timer;
 ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
 {
     if (!original_recvmsg) {
@@ -148,6 +175,7 @@ ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
         if (strncmp(buffer, "hook", 4) == 0) {
             printf("flag_recvmsg==1\n");
             flag_recvmsg = 1;
+            return 4;
 
         }
         else {
@@ -176,47 +204,55 @@ ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
             printf("Unknown address family.\n");
         }
         */
-        int total_bytes_received = 0;
-        for (int i=0; i < msg->msg_iovlen; i++) {
-            //printf("iov_len:%ld\n", msg->msg_iov[i].iov_len);
+        if (fp == NULL) {
+            fp = fopen(FILENAME, "rb");
+            fseek(fp, 24, SEEK_SET);
             if (fp == NULL) {
-                fp = fopen(FILENAME, "rb");
-                fseek(fp, 24, SEEK_SET);
-                if (fp == NULL) {
-                    perror("Could not open pcap file: %s\n");
-                    return 1;
-                }
+                perror("Could not open pcap file: %s\n");
+                return 1;
             }
-            long currentPosition = ftell(fp);
+        }
+        int total_bytes_received = 0;
+        for (int i = 0; i < msg->msg_iovlen; i++) {
+            long currentPosition = ftell(fp);  // check file lenth
             fseek(fp, 0, SEEK_END);
-            long totalLength = ftell(fp); 
+            long totalLength = ftell(fp);
             long distanceToEnd = totalLength - currentPosition;
-            printf("file_lenth:%ld\n", distanceToEnd);
+            size_t buffer_size = 0;
+            //printf("file_lenth:%ld\n", distanceToEnd);
             fseek(fp, currentPosition, SEEK_SET);
-            if (distanceToEnd < msg->msg_iov[i].iov_len) {
-                size_t buffer_size = distanceToEnd;
-                char  *buffer = malloc(buffer_size);
-                size_t bytes_read =fread(buffer, sizeof(char), buffer_size, fp);
-                //printf("buffer:%s\n", buffer);
-                total_bytes_received +=bytes_read ;
-                memcpy(msg->msg_iov[i].iov_base, buffer, buffer_size);
-                //printf("msg:%s\n", msg->msg_iov[i].iov_base);
-                //fread(msg->msg_iov[i].iov_base,distanceToEnd, 1, fp);
+            if (distanceToEnd < msg->msg_iov[i].iov_len) {  // 种子小于缓冲区长度
+                buffer_size = distanceToEnd;
+            } else {  // 种子大于缓冲区长度
+                buffer_size = msg->msg_iov[i].iov_len;
             }
-            else {
-                size_t buffer_size = msg->msg_iov[i].iov_len;
-                char  *buffer = malloc(buffer_size);
-                size_t bytes_read =fread(buffer, sizeof(char), buffer_size, fp);
-                //printf("buffer:%s\n", buffer);
-                total_bytes_received += bytes_read;
-                memcpy(msg->msg_iov[i].iov_base, buffer, buffer_size);
-                //printf("msg:%s\n", msg->msg_iov[i].iov_base);
+            char  *buffer = malloc(buffer_size);
+            size_t bytes_read = fread(buffer, sizeof(char), buffer_size, fp);
+            //printf("buffer:%c%c%c%c%c\n", buffer);
+            for (int m = 0; m < 100; m++) {
+                printf("%c", buffer[m]);
             }
-            currentPosition = ftell(fp);
+            printf("\n");
+            printf("buffer:%llx\n", buffer);
+            total_bytes_received += bytes_read;
+            printf("buffer_size:%d\n", buffer_size);
+            for (int n = 0; n < buffer_size; n++) {
+                *((char *)msg->msg_iov[i].iov_base + n) = buffer[n];
+            }
+            //memcpy(msg->msg_iov[i].iov_base, buffer, buffer_size);
+            //printf("msg:%c%c%c%c%c%c\n", msg->msg_iov[i].iov_base);
+            for (int m = 0; m < 100; m++) {
+                printf("%c", (msg->msg_iov[i].iov_base+m));
+            }
+            printf("\n");
+            printf("msg:%llx\n", (char*)msg->msg_iov[i].iov_base);
+            free(buffer);
+        }
+        /* currentPosition = ftell(fp);
             distanceToEnd = totalLength - currentPosition;
-            if (distanceToEnd<=0) {
+            if (distanceToEnd<=0) {*/
                 fclose(fp);
-                printf("current seed done.\n");
+                //printf("current seed done.\n");
                 fp = NULL;
                 //usleep(100000);
                 struct sigevent   sev;
@@ -233,10 +269,10 @@ ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
                 timer_settime(timer, 0, &its, NULL);
                 read_from_afl();
                 timer_delete(timer);
-            }
-        }
+            
+        
        
-        printf("total_bytes_received:%d\n", total_bytes_received);
+        //printf("total_bytes_received:%d\n", total_bytes_received);
         return total_bytes_received;  
     }
 }

@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include <dlfcn.h>
-#include<time.h>
+#include <time.h>
+#include <net/if.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -11,8 +12,15 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <sys/wait.h>
-void send_to_afl();
-void read_from_afl();
+#include <sys/ioctl.h>
+#include <fcntl.h>
+
+#include <sys/ioctl.h> // 添加此头文件
+#include <ifaddrs.h>
+#include <netinet/in.h>
+#include <netinet/ip.h>
+#include <netinet/ip_icmp.h>
+
 #define FORKSRV_FD 198
 #define MAX_LINE_LEN 1024
 #define HOOK_STRING "hook"
@@ -22,65 +30,95 @@ int status;
 const u_char* packet_data;
 timer_t       timer; // register timer
 static int flag_recvmsg = 0;
-
+static int flag_recvfrom = 0;
 static int flag_recv = 0;
-typedef ssize_t(*orig_recv_func_type)(int sockfd, void* buf, size_t len, int flags);
+static FILE  *fp;
+void   send_to_afl();
+void   read_from_afl();
+int    is_valid_socket(int fd);
+void   print_interface_indexes();
+int    get_interface_index();
+typedef ssize_t (*orig_recv_func_type)(int sockfd, void *buf, size_t len,
+                                       int flags);
 orig_recv_func_type original_recv = NULL;
-static FILE* fp;
-typedef struct {
-    uint32_t ts_sec;
-    uint32_t ts_usec;
-    uint32_t incl_len;
-    uint32_t orig_len;
-} PcapPacketHeader;
-static FILE* fp;
 ssize_t recv(int sockfd, void* buf, size_t len, int flags) {
     if (!original_recv) {
         original_recv = (orig_recv_func_type)dlsym(RTLD_NEXT, "recv");
     }
-    char buffer[len];
-    printf("recv\n");
-    ssize_t ret = (*original_recv)(sockfd, buffer, len, MSG_PEEK);
-    if (ret >= 4 && !flag_recv) {
-        if (ret >= 4 && strncmp(buffer, "hook", 4) == 0) {
+    //printf("recv\n");
+    int isNetworkSocket = sd_is_socket(sockfd, AF_UNSPEC, 0, 0);
+    if (!isNetworkSocket) {
+        printf("not network:%d\n", isNetworkSocket);
+        return original_recv(sockfd, buf, len, flags);
+    }
+    if (flag_recv == 0) {
+
+
+        char buffer[4];
+        if (len >= 4) {
+          ssize_t ret = original_recv(sockfd, buffer, 4, MSG_PEEK | MSG_DONTWAIT);
+          if (strncmp(buffer, "hook", 4) == 0) {
             flag_recv = 1;
+            return 4;
+          }
         }
+        return original_recv(sockfd, buf, len, flags);
     }
     if (flag_recv) {
-        printf("here\n");
+        //printf("here\n");
         read_from_afl();
         if (fp == NULL) {
-            fp = fopen(FILENAME, "rb");
-            fseek(fp, 24, SEEK_SET);
-            send_to_afl();
-            if (fp == NULL) {
-                perror("Could not open pcap file: %s\n");
-                return 1;
-            }
+          fp = fopen(FILENAME, "rb");
+          fseek(fp, 24, SEEK_SET);
+          if (fp == NULL) {
+            perror("Could not open pcap file: %s\n");
+            return 0;
+          }
         }
-        PcapPacketHeader header;
-        fread(&header, sizeof(header), 1, fp);
-        uint32_t packetSize = header.incl_len;
-        fread(buf, packetSize, 1, fp);
-        if (feof(fp)) {
-            fclose(fp);
-            fp = NULL;
+        int  total_bytes_received = 0;
+        long currentPosition = ftell(fp);  // check file lenth
+        fseek(fp, 0, SEEK_END);
+        long totalLength = ftell(fp);
+        long distanceToEnd = totalLength - currentPosition;
+        // printf("file_lenth:%ld\n", distanceToEnd);
+        fseek(fp, currentPosition, SEEK_SET);
+        if (distanceToEnd <= len) {
+          total_bytes_received = read(fileno(fp), buf, len);
+        } else {
+          total_bytes_received = read(fileno(fp), buf, distanceToEnd);
         }
-        return strlen(buf);
-
-
+        fclose(fp);
+        // printf("current seed done.\n");
+        fp = NULL;
+        struct sigevent   sev;
+        struct itimerspec its;
+        signal(SIGALRM, send_to_afl);
+        sev.sigev_notify = SIGEV_SIGNAL;
+        sev.sigev_signo = SIGALRM;
+        sev.sigev_value.sival_ptr = &timer;
+        timer_create(CLOCK_REALTIME, &sev, &timer);
+        its.it_interval.tv_sec = 0;
+        its.it_interval.tv_nsec = 0;
+        its.it_value.tv_sec = 0;
+        its.it_value.tv_nsec = 10000;
+        timer_settime(timer, 0, &its, NULL);
+        read_from_afl();
+        timer_delete(timer);
+        return total_bytes_received;
     }
-    return original_recv(sockfd, buf, len, flags);
+    
 }
-static int flag_recvfrom = 0;
-typedef ssize_t(*recvfrom_t)(int sockfd, void* buf, size_t len, int flags,
-    struct sockaddr* src_addr, socklen_t* addrlen);
+typedef ssize_t(*recvfrom_t)(int sockfd, void* buf, size_t len, int flags, struct sockaddr* src_addr, socklen_t* addrlen);
 static recvfrom_t original_recvfrom = NULL;
 ssize_t recvfrom(int sockfd, void* buf, size_t len, int flags,
     struct sockaddr* src_addr, socklen_t* addrlen) {
-    if (original_recvfrom == NULL) {
+    if (!original_recvfrom) {
         original_recvfrom = dlsym(RTLD_NEXT, "recvfrom");
     }
+
+    int check_valid=is_valid_socket(sockfd);
+    printf("%d\n", check_valid);
+
     int isNetworkSocket = sd_is_socket(sockfd, AF_UNSPEC, 0, 0);
     if (!isNetworkSocket) {
         printf("not network:%d\n", isNetworkSocket);
@@ -104,7 +142,7 @@ ssize_t recvfrom(int sockfd, void* buf, size_t len, int flags,
             fseek(fp, 24, SEEK_SET);
             if (fp == NULL) {
                 perror("Could not open pcap file: %s\n");
-                return 1;
+                return 0;
             }
         }
         int  total_bytes_received = 0;
@@ -152,6 +190,11 @@ ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
     if (!original_recvmsg) {
         original_recvmsg = (orig_recvmsg_func_type)dlsym(RTLD_NEXT, "recvmsg");
     }
+
+    int check_valid = is_valid_socket(sockfd);
+    //printf("%d\n", check_valid);
+
+
     //printf("recvmsg, msg.msg_iovlen=%ld, msg.msg_iov[0].iov_len=%ld \n", msg->msg_iovlen,
     //    msg->msg_iov[0].iov_len);
     char buffer[5];
@@ -182,7 +225,32 @@ ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
             return original_recvmsg(sockfd, msg, flags);
         }
     }
-    if (flag_recvmsg == 1) {
+    if (flag_recvmsg == 1) 
+    {
+        //print_interface_indexes();
+        struct ifreq ifr;
+        /* ifr.ifr_ifindex = 1;
+        if (ioctl(sockfd, SIOCGIFNAME, &ifr) == -1) { perror("ioctl");
+        }
+        printf("name:%s\n", ifr.ifr_name);*/
+        struct in_pktinfo ip_pktinfo_value;
+        ip_pktinfo_value.ipi_spec_dst.s_addr =inet_addr("127.0.0.1");  
+        ip_pktinfo_value.ipi_ifindex = 1;  
+        //printf("index:%d\n", ip_pktinfo_value.ipi_ifindex);
+        // 手动填充msg.msg_control
+         char   control_buffer[CMSG_SPACE(sizeof(struct in_pktinfo))];
+        struct cmsghdr *cmptr = (struct cmsghdr *)control_buffer;
+        cmptr->cmsg_len = CMSG_LEN(sizeof(struct in_pktinfo));
+        cmptr->cmsg_level = IPPROTO_IP;
+        cmptr->cmsg_type = IP_PKTINFO;
+        // 将数据拷贝到msg.msg_control中
+        memcpy(CMSG_DATA(cmptr), &ip_pktinfo_value,sizeof(struct in_pktinfo));
+        msg->msg_control = control_buffer;
+        msg->msg_controllen = cmptr->cmsg_len;
+      
+        
+
+
         /* if (msg->msg_flags & MSG_TRUNC) {
             printf("Received message is truncated.\n");
         } else {
@@ -209,7 +277,7 @@ ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
             fseek(fp, 24, SEEK_SET);
             if (fp == NULL) {
                 perror("Could not open pcap file: %s\n");
-                return 1;
+                return 0;
             }
         }
         int total_bytes_received = 0;
@@ -228,24 +296,10 @@ ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
             }
             char  *buffer = malloc(buffer_size);
             size_t bytes_read = fread(buffer, sizeof(char), buffer_size, fp);
-            //printf("buffer:%c%c%c%c%c\n", buffer);
-            for (int m = 0; m < 100; m++) {
-                printf("%c", buffer[m]);
-            }
-            printf("\n");
-            printf("buffer:%llx\n", buffer);
+            //printf("bytes_read:%d\n", bytes_read);
             total_bytes_received += bytes_read;
-            printf("buffer_size:%d\n", buffer_size);
-            for (int n = 0; n < buffer_size; n++) {
-                *((char *)msg->msg_iov[i].iov_base + n) = buffer[n];
-            }
-            //memcpy(msg->msg_iov[i].iov_base, buffer, buffer_size);
-            //printf("msg:%c%c%c%c%c%c\n", msg->msg_iov[i].iov_base);
-            for (int m = 0; m < 100; m++) {
-                printf("%c", (msg->msg_iov[i].iov_base+m));
-            }
-            printf("\n");
-            printf("msg:%llx\n", (char*)msg->msg_iov[i].iov_base);
+            //printf("buffer_size:%d\n", buffer_size);
+            memcpy(msg->msg_iov[i].iov_base, buffer, buffer_size);
             free(buffer);
         }
         /* currentPosition = ftell(fp);
@@ -269,10 +323,12 @@ ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
                 timer_settime(timer, 0, &its, NULL);
                 read_from_afl();
                 timer_delete(timer);
-            
+                /* for (int m = 0; m < msg->msg_controllen; m++) {
+            printf("%d", (int *)(msg->msg_control + m));
+                }*/
         
        
-        //printf("total_bytes_received:%d\n", total_bytes_received);
+        printf("total_bytes_received:%d\n", total_bytes_received);
         return total_bytes_received;  
     }
 }
@@ -301,4 +357,53 @@ int close(int fd) {
     int (*original_close)(int);
     original_close = dlsym(RTLD_NEXT, "close");
     return original_close(fd);
+}
+int is_valid_socket(int fd) {
+    // 使用 F_GETFL 标志获取文件描述符状态
+    int flags = fcntl(fd, F_GETFL);
+
+    // 如果 fcntl 成功执行，说明文件描述符是有效的
+    return (flags != -1);
+}
+void print_interface_indexes() {
+    struct if_nameindex *if_nidxs, *intf;
+
+    if_nidxs = if_nameindex();
+    if (if_nidxs == NULL) {
+        perror("if_nameindex");
+        return;
+    }
+
+    // 遍历网络接口列表并打印索引和名称
+    for (intf = if_nidxs; intf->if_index != 0 || intf->if_name != NULL;
+         intf++) {
+        printf("Interface name: %s, Index: %u\n", intf->if_name,
+               intf->if_index);
+    }
+
+    // 释放资源
+    if_freenameindex(if_nidxs);
+}
+int get_interface_index(int sockfd) {
+    // 获取套接字绑定的本地地址
+    struct sockaddr_in local_addr;
+    socklen_t          addr_len = sizeof(local_addr);
+    if (getsockname(sockfd, (struct sockaddr *)&local_addr, &addr_len) == -1) {
+        perror("getsockname");
+        return -1;
+    }
+
+    // 将本地地址的 IP 转换为字符串
+    char ip_str[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &(local_addr.sin_addr), ip_str, INET_ADDRSTRLEN);
+
+    // 使用 if_nametoindex 函数获取与 IP 相关联的网络接口索引
+    unsigned int interface_index = if_nametoindex("eth0");
+    if (interface_index == 0) {
+        perror("if_nametoindex");
+        return -1;
+    }
+
+    // 返回获取到的网络接口索引
+    return interface_index;
 }

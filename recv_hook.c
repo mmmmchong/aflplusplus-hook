@@ -38,8 +38,7 @@ void   read_from_afl();
 int    is_valid_socket(int fd);
 void   print_interface_indexes();
 int    get_interface_index();
-typedef ssize_t (*orig_recv_func_type)(int sockfd, void *buf, size_t len,
-                                       int flags);
+typedef ssize_t (*orig_recv_func_type)(int sockfd, void *buf, size_t len, int flags);
 orig_recv_func_type original_recv = NULL;
 ssize_t recv(int sockfd, void* buf, size_t len, int flags) {
     if (!original_recv) {
@@ -182,6 +181,7 @@ ssize_t recvfrom(int sockfd, void* buf, size_t len, int flags,
 
 }
 
+
 typedef ssize_t(*orig_recvmsg_func_type)(int sockfd, struct msghdr* msg, int flags);
 //original recvmsg
 static orig_recvmsg_func_type original_recvmsg = NULL;
@@ -227,6 +227,14 @@ ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
     }
     if (flag_recvmsg == 1) 
     {
+        struct sockaddr_in target_addr;
+        target_addr.sin_family = AF_INET;
+        target_addr.sin_port = htons(10001);  // 将主机字节序转换为网络字节序
+        inet_pton(AF_INET, "127.0.0.1", &(target_addr.sin_addr));
+        memcpy(msg->msg_name, &target_addr, sizeof(struct sockaddr_in));
+        msg->msg_namelen = sizeof(struct sockaddr_in);
+
+
         //print_interface_indexes();
         struct ifreq ifr;
         /* ifr.ifr_ifindex = 1;

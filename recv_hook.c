@@ -14,7 +14,6 @@
 #include <sys/wait.h>
 #include <sys/ioctl.h>
 #include <fcntl.h>
-
 #include <sys/ioctl.h> // 添加此头文件
 #include <ifaddrs.h>
 #include <netinet/in.h>
@@ -31,6 +30,7 @@ const u_char* packet_data;
 timer_t       timer; // register timer
 static int flag_recvmsg = 0;
 static int flag_recvfrom = 0;
+static int flag_read = 0;
 static int flag_recv = 0;
 static FILE  *fp;
 void   send_to_afl();
@@ -44,16 +44,14 @@ ssize_t recv(int sockfd, void* buf, size_t len, int flags) {
     if (!original_recv) {
         original_recv = (orig_recv_func_type)dlsym(RTLD_NEXT, "recv");
     }
-    //printf("recv\n");
+    printf("recv\n");
     int isNetworkSocket = sd_is_socket(sockfd, AF_UNSPEC, 0, 0);
     if (!isNetworkSocket) {
         printf("not network:%d\n", isNetworkSocket);
         return original_recv(sockfd, buf, len, flags);
     }
     if (flag_recv == 0) {
-
-
-        char buffer[4];
+        char buffer[5];
         if (len >= 4) {
           ssize_t ret = original_recv(sockfd, buffer, 4, MSG_PEEK | MSG_DONTWAIT);
           if (strncmp(buffer, "hook", 4) == 0) {
@@ -64,7 +62,7 @@ ssize_t recv(int sockfd, void* buf, size_t len, int flags) {
         return original_recv(sockfd, buf, len, flags);
     }
     if (flag_recv) {
-        //printf("here\n");
+        printf("hook\n");
         read_from_afl();
         if (fp == NULL) {
           fp = fopen(FILENAME, "rb");
@@ -105,7 +103,6 @@ ssize_t recv(int sockfd, void* buf, size_t len, int flags) {
         timer_delete(timer);
         return total_bytes_received;
     }
-    
 }
 typedef ssize_t(*recvfrom_t)(int sockfd, void* buf, size_t len, int flags, struct sockaddr* src_addr, socklen_t* addrlen);
 static recvfrom_t original_recvfrom = NULL;
@@ -114,10 +111,8 @@ ssize_t recvfrom(int sockfd, void* buf, size_t len, int flags,
     if (!original_recvfrom) {
         original_recvfrom = dlsym(RTLD_NEXT, "recvfrom");
     }
-
     int check_valid=is_valid_socket(sockfd);
-    printf("%d\n", check_valid);
-
+    //printf("%d\n", check_valid);
     int isNetworkSocket = sd_is_socket(sockfd, AF_UNSPEC, 0, 0);
     if (!isNetworkSocket) {
         printf("not network:%d\n", isNetworkSocket);
@@ -180,8 +175,82 @@ ssize_t recvfrom(int sockfd, void* buf, size_t len, int flags,
     }
 
 }
-
-
+typedef ssize_t (*orig_read_func_type)(int sockfd, void *buf, size_t count);
+static orig_read_func_type original_read = NULL;
+ssize_t  read(int fd, void *buf, size_t count) {
+    //printf("here\n");
+    if (!original_read) {
+        original_read = (orig_read_func_type)dlsym(RTLD_NEXT, "read");
+    }
+    if (!original_recv) {
+        original_recv = (orig_recv_func_type)dlsym(RTLD_NEXT, "recv");
+    }
+    int isNetworkSocket = sd_is_socket(fd, AF_UNSPEC, 0, 0);
+    if (!isNetworkSocket) {
+        //printf("not network:%d\n", isNetworkSocket);
+        return original_read(fd, buf, count);
+    }
+    if (flag_read == 0) {
+        char buffer[5];
+             ssize_t ret =original_recv(fd, buffer, 4, MSG_PEEK | MSG_DONTWAIT);
+             //printf("buffer:%s\n", buffer);
+             if (strncmp(buffer, "hook", 4) == 0) {
+                flag_read = 1;
+                //return 4;
+             } else {
+                return original_read(fd, buf, count);
+                }
+    }
+    if (flag_read == 1) {
+        printf("count:%ld\n", count);
+        //
+        //printf("hook\n");
+        //read_from_afl();
+        if (fp == NULL) {
+             fp = fopen(FILENAME, "rb");
+             fseek(fp, 24, SEEK_SET);
+             if (fp == NULL) {
+                perror("Could not open pcap file: %s\n");
+                return 0;
+             }
+        }
+        int  total_bytes_received = 0;
+        long currentPosition = ftell(fp);  // check file lenth
+        fseek(fp, 0, SEEK_END);
+        long totalLength = ftell(fp);
+        long distanceToEnd = totalLength - currentPosition;
+        printf("file_lenth:%ld\n", distanceToEnd);
+        fseek(fp, currentPosition, SEEK_SET);
+        if (distanceToEnd <= count) { 
+            total_bytes_received =fread((char*)buf, sizeof(char), distanceToEnd, fp);
+            fclose(fp);
+            fp = NULL;
+            //((char*)buf)[0] = 0x10;
+            // fclose(fp);
+            //  printf("current seed done.\n");
+            // fp = NULL;
+            struct sigevent sev;
+            struct itimerspec its;
+            signal(SIGALRM, send_to_afl);
+            sev.sigev_notify = SIGEV_SIGNAL;
+            sev.sigev_signo = SIGALRM;
+            sev.sigev_value.sival_ptr = &timer;
+            timer_create(CLOCK_REALTIME, &sev, &timer);
+            its.it_interval.tv_sec = 0;
+            its.it_interval.tv_nsec = 0;
+            its.it_value.tv_sec = 0;
+            its.it_value.tv_nsec = 100000;
+            timer_settime(timer, 0, &its, NULL);
+            read_from_afl();
+            timer_delete(timer);
+        } else {
+            total_bytes_received = fread((char*)buf, sizeof(char), count, fp);
+        }
+        printf("buf:%s\n", (char*)buf);
+        printf("total_bytes_received:%d\n", total_bytes_received);
+        return total_bytes_received;
+    }
+}
 typedef ssize_t(*orig_recvmsg_func_type)(int sockfd, struct msghdr* msg, int flags);
 //original recvmsg
 static orig_recvmsg_func_type original_recvmsg = NULL;
@@ -193,14 +262,12 @@ ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
 
     int check_valid = is_valid_socket(sockfd);
     //printf("%d\n", check_valid);
-
-
     //printf("recvmsg, msg.msg_iovlen=%ld, msg.msg_iov[0].iov_len=%ld \n", msg->msg_iovlen,
     //    msg->msg_iov[0].iov_len);
     char buffer[5];
     int isNetworkSocket = sd_is_socket(sockfd, AF_UNSPEC, 0 , 0);
     if (!isNetworkSocket) {
-        printf("not network:%d\n",isNetworkSocket);
+        //printf("not network:%d\n",isNetworkSocket);
         return original_recvmsg(sockfd, msg, flags);
     }
     if (flag_recvmsg == 0) {
@@ -219,7 +286,6 @@ ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
             printf("flag_recvmsg==1\n");
             flag_recvmsg = 1;
             return 4;
-
         }
         else {
             return original_recvmsg(sockfd, msg, flags);
@@ -227,14 +293,13 @@ ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
     }
     if (flag_recvmsg == 1) 
     {
+        //read_from_afl();
         struct sockaddr_in target_addr;
         target_addr.sin_family = AF_INET;
         target_addr.sin_port = htons(10001);  // 将主机字节序转换为网络字节序
         inet_pton(AF_INET, "127.0.0.1", &(target_addr.sin_addr));
         memcpy(msg->msg_name, &target_addr, sizeof(struct sockaddr_in));
         msg->msg_namelen = sizeof(struct sockaddr_in);
-
-
         //print_interface_indexes();
         struct ifreq ifr;
         /* ifr.ifr_ifindex = 1;
@@ -255,10 +320,6 @@ ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
         memcpy(CMSG_DATA(cmptr), &ip_pktinfo_value,sizeof(struct in_pktinfo));
         msg->msg_control = control_buffer;
         msg->msg_controllen = cmptr->cmsg_len;
-      
-        
-
-
         /* if (msg->msg_flags & MSG_TRUNC) {
             printf("Received message is truncated.\n");
         } else {
@@ -282,41 +343,69 @@ ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
         */
         if (fp == NULL) {
             fp = fopen(FILENAME, "rb");
-            fseek(fp, 24, SEEK_SET);
+            //fseek(fp, 0, SEEK_SET);
             if (fp == NULL) {
-                perror("Could not open pcap file: %s\n");
+                perror("Could not open file: %s\n");
                 return 0;
             }
         }
         int total_bytes_received = 0;
         for (int i = 0; i < msg->msg_iovlen; i++) {
-            long currentPosition = ftell(fp);  // check file lenth
-            fseek(fp, 0, SEEK_END);
-            long totalLength = ftell(fp);
-            long distanceToEnd = totalLength - currentPosition;
+            unsigned char length_bytes[2];
             size_t buffer_size = 0;
-            //printf("file_lenth:%ld\n", distanceToEnd);
-            fseek(fp, currentPosition, SEEK_SET);
-            if (distanceToEnd < msg->msg_iov[i].iov_len) {  // 种子小于缓冲区长度
-                buffer_size = distanceToEnd;
-            } else {  // 种子大于缓冲区长度
+            size_t bytes_read = 0;
+            long   current_pos;
+            long   file_length;
+            long   remaining_length;
+            char  *buffer;
+            int    error_packet = 0;
+            fread(length_bytes, sizeof(unsigned char), 2, fp);
+            unsigned short length = (length_bytes[0] << 8) | length_bytes[1];
+            //printf("length:%d\n",length);
+            if (length == 0) {  //认为是错误的包 
+                error_packet = 1;
+            } else if (length < msg->msg_iov[i].iov_len) {  // 包长度小于缓冲区长度
+                buffer_size = length;
+                buffer = malloc(buffer_size);
+                bytes_read = fread(buffer, sizeof(char), buffer_size, fp);
+            }else{  // 种子大于缓冲区长度
                 buffer_size = msg->msg_iov[i].iov_len;
+                buffer = malloc(buffer_size);
+                bytes_read = fread(buffer, sizeof(char), buffer_size, fp);
+                current_pos= ftell(fp);
+                fseek(fp, 0, SEEK_END);
+                file_length = ftell(fp);
+                remaining_length = file_length - current_pos;
+                //printf("remaining_length:%d\n", remaining_length);
+                if (remaining_length <= length + 2) {
+                    error_packet = 1;
+                    //printf("wrong packet\n");
+                } else {
+                    fseek(fp, current_pos + length - remaining_length, SEEK_SET);
+                }
             }
-            char  *buffer = malloc(buffer_size);
-            size_t bytes_read = fread(buffer, sizeof(char), buffer_size, fp);
+            /* long current_pos = ftell(fp);
+            fseek(fp, 0, SEEK_END);
+            long file_length = ftell(fp);
+            long remaining_length = file_length - current_pos;
+            fseek(fp, current_pos, SEEK_SET);
+            printf("remaining_length:%ld\n", remaining_length);*/
+            /* if (fseek(fp, length - msg->msg_iov[i].iov_len, SEEK_CUR) !=
+                         0 ||
+                     bytes_read < buffer_size) {
+                fseek(fp, 0, SEEK_END);
+            }*/
             //printf("bytes_read:%d\n", bytes_read);
-            total_bytes_received += bytes_read;
             //printf("buffer_size:%d\n", buffer_size);
-            memcpy(msg->msg_iov[i].iov_base, buffer, buffer_size);
-            free(buffer);
-        }
-        /* currentPosition = ftell(fp);
-            distanceToEnd = totalLength - currentPosition;
-            if (distanceToEnd<=0) {*/
+            if (!error_packet) {
+                total_bytes_received += bytes_read;
+                memcpy(msg->msg_iov[i].iov_base, buffer, buffer_size);
+                free(buffer);
+            }
+            if (feof(fp)|| error_packet) { 
                 fclose(fp);
-                //printf("current seed done.\n");
                 fp = NULL;
-                //usleep(100000);
+                //printf("current seed done.\n");
                 struct sigevent   sev;
                 struct itimerspec its;
                 signal(SIGALRM, send_to_afl);
@@ -327,19 +416,17 @@ ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags)
                 its.it_interval.tv_sec = 0;
                 its.it_interval.tv_nsec = 0;
                 its.it_value.tv_sec = 0;
-                its.it_value.tv_nsec = 10000;  
+                its.it_value.tv_nsec = 1;
                 timer_settime(timer, 0, &its, NULL);
                 read_from_afl();
                 timer_delete(timer);
-                /* for (int m = 0; m < msg->msg_controllen; m++) {
-            printf("%d", (int *)(msg->msg_control + m));
-                }*/
-        
-       
-        printf("total_bytes_received:%d\n", total_bytes_received);
+            }
+        }
+        //printf("total_bytes_received:%d\n", total_bytes_received);
         return total_bytes_received;  
     }
 }
+
 void send_to_afl() {
     if (write(FORKSRV_FD + 4, FINIREAD, 4) < 0) {
 
@@ -350,9 +437,12 @@ void send_to_afl() {
     //printf("send success\n");
 }
 void read_from_afl() {
+    if (!original_read) {
+        original_read = (orig_read_func_type)dlsym(RTLD_NEXT, "read");
+    }
     char buf[4];
     int res = 0;
-    if ((res = read(FORKSRV_FD + 3, buf, 4)) < 0) {
+    if ((res = original_read(FORKSRV_FD + 3, buf, 4)) < 0) {
         perror("Don't recv hello?(OOM?)read_from_afl:");
         //_exit(1);
     }

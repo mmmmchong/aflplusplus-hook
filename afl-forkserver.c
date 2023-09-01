@@ -1465,7 +1465,8 @@ int net_send(int sockfd, struct timeval timeout, char *mem, unsigned int len) {
 
   return byte_count;
 }
-int send_udp_hook() {
+//add
+void send_udp_hook() {
   int                sockfd;
   struct sockaddr_in servaddr;
   char               buffer[6] = "hook ";
@@ -1476,6 +1477,13 @@ int send_udp_hook() {
     perror("socket creation failed");
     exit(EXIT_FAILURE);
   }
+   int option_value = 1;
+  if (setsockopt(sockfd, IPPROTO_IP, IP_PKTINFO, &option_value,sizeof(option_value)) == -1) {
+    perror("setsockopt");
+    close(sockfd);
+    exit(EXIT_FAILURE);
+  }
+
   memset(&servaddr, 0, sizeof(servaddr));
 
   // 设置服务器地址和端口
@@ -1493,6 +1501,34 @@ int send_udp_hook() {
   // 关闭套接字
   close(sockfd);
 }
+//add
+void send_tcp_hook() {
+  int    sockfd;
+  char   buffer[6] = "hook ";
+  sockfd = socket(AF_INET, SOCK_STREAM, 0);
+  if (sockfd == -1) {
+    perror("Socket creation failed");
+    return 1;
+  }
+  struct sockaddr_in servaddr;
+  servaddr.sin_family = AF_INET;
+  servaddr.sin_port = htons(net_port);
+  servaddr.sin_addr.s_addr = inet_addr(net_ip);
+  if (connect(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr)) == -1) {
+    perror("Connection failed");
+    close(sockfd);
+    return 1;
+  }
+  ssize_t bytes_sent = send(sockfd, buffer, strlen(buffer), 0);
+  if (bytes_sent == -1) {
+    perror("Send failed");
+    close(sockfd);
+    return 1;
+  }
+  printf("TCP packet sent to %s:%d\n",net_ip,net_port);
+  close(sockfd);
+}
+
     // zyp modfied from aflnet
 int send_over_network() {
   int                n;
@@ -1753,10 +1789,13 @@ fsrv_run_result_t afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
   }
 
   // zyp
-
   if (is_new_start) { 
       usleep(new_start_server_waitusecs);
-    send_udp_hook();
+    if (net_protocol == 1) {
+      send_udp_hook();
+    } else {
+      send_tcp_hook();
+    }
       //add connection
       //send hook
   }
@@ -1768,7 +1807,12 @@ fsrv_run_result_t afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
       gettimeofday(&start, NULL);
       //send_over_network();
       //add
-      int check_send;
+      int  check_send;
+      char buf[4];
+      if ((check_send = read(recv_pipe[0], buf, 4)) != 4) {
+      WARNF("don't recv from hook ");
+      }
+      
       if ((check_send = write(send_pipe[1], "HALO", 4)) < 0) {
       WARNF("Unable to write ");
       }
@@ -1778,10 +1822,7 @@ fsrv_run_result_t afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
       perror("Don't recv hello?(OOM?)\n");
       _exit(1);
       }*/
-       char buf[4];
-      if ((check_send = read(recv_pipe[0], buf, 4)) != 4) {
-      WARNF("don't recv from hook ");
-      }
+     
       // ADD END
       gettimeofday(&end, NULL);
       timer = (1000000 * (end.tv_sec - start.tv_sec) + end.tv_usec - start.tv_usec) / 1000; // in ms

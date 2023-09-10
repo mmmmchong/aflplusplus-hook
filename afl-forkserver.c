@@ -5,7 +5,7 @@
    Originally written by Michal Zalewski
 
    Forkserver design by Jann Horn <jannhorn@googlemail.com>
-   
+
    Now maintained by Marc Heuse <mh@mh-sec.de>,
                         Heiko Eißfeldt <heiko.eissfeldt@hexco.de> and
                         Andrea Fioraldi <andreafioraldi@gmail.com> and
@@ -13,7 +13,7 @@
 
 
    Copyright 2016, 2017 Google Inc. All rights reserved.
-   Copyright 2019-2022 AFLplusplus Project. All rights reserved.
+   Copyright 2019-2023 AFLplusplus Project. All rights reserved.
 
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
@@ -49,6 +49,140 @@
 #include <sys/select.h>
 #include <sys/stat.h>
 
+#ifdef __linux__
+  #include <dlfcn.h>
+
+/* function to load nyx_helper function from libnyx.so */
+
+nyx_plugin_handler_t *afl_load_libnyx_plugin(u8 *libnyx_binary) {
+
+  void                 *handle;
+  nyx_plugin_handler_t *plugin = calloc(1, sizeof(nyx_plugin_handler_t));
+
+  ACTF("Trying to load libnyx.so plugin...");
+  handle = dlopen((char *)libnyx_binary, RTLD_NOW);
+  if (!handle) { goto fail; }
+
+  plugin->nyx_config_load = dlsym(handle, "nyx_config_load");
+  if (plugin->nyx_config_load == NULL) { goto fail; }
+
+  plugin->nyx_config_set_workdir_path =
+      dlsym(handle, "nyx_config_set_workdir_path");
+  if (plugin->nyx_config_set_workdir_path == NULL) { goto fail; }
+
+  plugin->nyx_config_set_input_buffer_size =
+      dlsym(handle, "nyx_config_set_input_buffer_size");
+  if (plugin->nyx_config_set_input_buffer_size == NULL) { goto fail; }
+
+  plugin->nyx_config_set_input_buffer_write_protection =
+      dlsym(handle, "nyx_config_set_input_buffer_write_protection");
+  if (plugin->nyx_config_set_input_buffer_write_protection == NULL) {
+
+    goto fail;
+
+  }
+
+  plugin->nyx_config_set_hprintf_fd =
+      dlsym(handle, "nyx_config_set_hprintf_fd");
+  if (plugin->nyx_config_set_hprintf_fd == NULL) { goto fail; }
+
+  plugin->nyx_config_set_process_role =
+      dlsym(handle, "nyx_config_set_process_role");
+  if (plugin->nyx_config_set_process_role == NULL) { goto fail; }
+
+  plugin->nyx_config_set_reuse_snapshot_path =
+      dlsym(handle, "nyx_config_set_reuse_snapshot_path");
+  if (plugin->nyx_config_set_reuse_snapshot_path == NULL) { goto fail; }
+
+  plugin->nyx_new = dlsym(handle, "nyx_new");
+  if (plugin->nyx_new == NULL) { goto fail; }
+
+  plugin->nyx_shutdown = dlsym(handle, "nyx_shutdown");
+  if (plugin->nyx_shutdown == NULL) { goto fail; }
+
+  plugin->nyx_option_set_reload_mode =
+      dlsym(handle, "nyx_option_set_reload_mode");
+  if (plugin->nyx_option_set_reload_mode == NULL) { goto fail; }
+
+  plugin->nyx_option_set_timeout = dlsym(handle, "nyx_option_set_timeout");
+  if (plugin->nyx_option_set_timeout == NULL) { goto fail; }
+
+  plugin->nyx_option_apply = dlsym(handle, "nyx_option_apply");
+  if (plugin->nyx_option_apply == NULL) { goto fail; }
+
+  plugin->nyx_set_afl_input = dlsym(handle, "nyx_set_afl_input");
+  if (plugin->nyx_set_afl_input == NULL) { goto fail; }
+
+  plugin->nyx_exec = dlsym(handle, "nyx_exec");
+  if (plugin->nyx_exec == NULL) { goto fail; }
+
+  plugin->nyx_get_bitmap_buffer = dlsym(handle, "nyx_get_bitmap_buffer");
+  if (plugin->nyx_get_bitmap_buffer == NULL) { goto fail; }
+
+  plugin->nyx_get_bitmap_buffer_size =
+      dlsym(handle, "nyx_get_bitmap_buffer_size");
+  if (plugin->nyx_get_bitmap_buffer_size == NULL) { goto fail; }
+
+  plugin->nyx_get_aux_string = dlsym(handle, "nyx_get_aux_string");
+  if (plugin->nyx_get_aux_string == NULL) { goto fail; }
+
+  plugin->nyx_remove_work_dir = dlsym(handle, "nyx_remove_work_dir");
+  if (plugin->nyx_remove_work_dir == NULL) { goto fail; }
+
+  plugin->nyx_config_set_aux_buffer_size =
+      dlsym(handle, "nyx_config_set_aux_buffer_size");
+  if (plugin->nyx_config_set_aux_buffer_size == NULL) { goto fail; }
+
+  OKF("libnyx plugin is ready!");
+  return plugin;
+
+fail:
+
+  FATAL("failed to load libnyx: %s\n", dlerror());
+  ck_free(plugin);
+  return NULL;
+
+}
+
+void afl_nyx_runner_kill(afl_forkserver_t *fsrv) {
+
+  if (fsrv->nyx_mode) {
+
+    if (fsrv->nyx_aux_string) { ck_free(fsrv->nyx_aux_string); }
+
+    /* check if we actually got a valid nyx runner */
+    if (fsrv->nyx_runner) {
+
+      fsrv->nyx_handlers->nyx_shutdown(fsrv->nyx_runner);
+
+    }
+
+    /* if we have use a tmp work dir we need to remove it */
+    if (fsrv->nyx_use_tmp_workdir && fsrv->nyx_tmp_workdir_path) {
+
+      remove_nyx_tmp_workdir(fsrv, fsrv->nyx_tmp_workdir_path);
+
+    }
+
+    if (fsrv->nyx_log_fd >= 0) { close(fsrv->nyx_log_fd); }
+
+  }
+
+}
+
+  /* Wrapper for FATAL() that kills the nyx runner (and removes all created tmp
+   * files) before exiting. Used before "afl_fsrv_killall()" is registered as
+   * an atexit() handler. */
+  #define NYX_PRE_FATAL(fsrv, x...) \
+    do {                            \
+                                    \
+      afl_nyx_runner_kill(fsrv);    \
+      FATAL(x);                     \
+                                    \
+    } while (0)
+
+#endif
+
 /**
  * The correct fds for reading and writing pipes
  */
@@ -59,7 +193,11 @@ static list_t fsrv_list = {.element_prealloc_count = 0};
 
 static void fsrv_exec_child(afl_forkserver_t *fsrv, char **argv) {
 
-  if (fsrv->qemu_mode) { setenv("AFL_DISABLE_LLVM_INSTRUMENTATION", "1", 0); }
+  if (fsrv->qemu_mode || fsrv->cs_mode) {
+
+    setenv("AFL_DISABLE_LLVM_INSTRUMENTATION", "1", 0);
+
+  }
 
   execv(fsrv->target_path, argv);
 
@@ -80,6 +218,9 @@ void afl_fsrv_init(afl_forkserver_t *fsrv) {
   fsrv->nyx_runner = NULL;
   fsrv->nyx_id = 0xFFFFFFFF;
   fsrv->nyx_bind_cpu_id = 0xFFFFFFFF;
+  fsrv->nyx_use_tmp_workdir = false;
+  fsrv->nyx_tmp_workdir_path = NULL;
+  fsrv->nyx_log_fd = -1;
 #endif
 
   // this structure needs default so we initialize it if this was not done
@@ -96,7 +237,7 @@ void afl_fsrv_init(afl_forkserver_t *fsrv) {
   fsrv->init_tmout = EXEC_TIMEOUT * FORK_WAIT_MULT;
   fsrv->mem_limit = MEM_LIMIT;
   fsrv->out_file = NULL;
-  fsrv->kill_signal = SIGKILL;
+  fsrv->child_kill_signal = SIGKILL;
 
   /* exec related stuff */
   fsrv->child_pid = -1;
@@ -130,7 +271,7 @@ void afl_fsrv_init_dup(afl_forkserver_t *fsrv_to, afl_forkserver_t *from) {
   fsrv_to->no_unlink = from->no_unlink;
   fsrv_to->uses_crash_exitcode = from->uses_crash_exitcode;
   fsrv_to->crash_exitcode = from->crash_exitcode;
-  fsrv_to->kill_signal = from->kill_signal;
+  fsrv_to->child_kill_signal = from->child_kill_signal;
   fsrv_to->debug = from->debug;
 
   // These are forkserver specific.
@@ -281,13 +422,13 @@ static void afl_fauxsrv_execv(afl_forkserver_t *fsrv, char **argv) {
       sigaction(SIGPIPE, &sa, NULL);
 
       signal(SIGCHLD, old_sigchld_handler);
+
       // FORKSRV_FD is for communication with AFL, we don't need it in the
-      // child.
+      // child
       close(FORKSRV_FD);
       close(FORKSRV_FD + 1);
 
-      // TODO: exec...
-
+      // finally: exec...
       execv(fsrv->target_path, argv);
 
       /* Use a distinctive bitmap signature to tell the parent about execv()
@@ -355,7 +496,7 @@ static void report_error_and_exit(int error) {
       break;
     case FS_ERROR_OLD_CMPLOG:
       FATAL(
-          "the -c cmplog target was instrumented with an too old afl++ "
+          "the -c cmplog target was instrumented with an too old AFL++ "
           "version, you need to recompile it.");
       break;
     case FS_ERROR_OLD_CMPLOG_QEMU:
@@ -377,9 +518,11 @@ static void report_error_and_exit(int error) {
    In essence, the instrumentation allows us to skip execve(), and just keep
    cloning a stopped child. So, we just execute once, and then send commands
    through a pipe. The other part of this logic is in afl-as.h / llvm_mode */
+
 // add
- int send_pipe[2], recv_pipe[2];
+int send_pipe[2], recv_pipe[2];
 // add end
+
 void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
                     volatile u8 *stop_soon_p, u8 debug_child_output) {
 
@@ -395,40 +538,149 @@ void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
 
     if (!be_quiet) { ACTF("Spinning up the NYX backend..."); }
 
-    if (fsrv->out_dir_path == NULL) { FATAL("Nyx workdir path not found..."); }
+    if (fsrv->nyx_use_tmp_workdir) {
 
-    char *x = alloc_printf("%s/workdir", fsrv->out_dir_path);
-
-    if (fsrv->nyx_id == 0xFFFFFFFF) { FATAL("Nyx ID is not set..."); }
-
-    if (fsrv->nyx_bind_cpu_id == 0xFFFFFFFF) {
-
-      FATAL("Nyx CPU ID is not set...");
-
-    }
-
-    if (fsrv->nyx_standalone) {
-
-      fsrv->nyx_runner = fsrv->nyx_handlers->nyx_new(
-          fsrv->target_path, x, fsrv->nyx_bind_cpu_id, MAX_FILE, true);
+      fsrv->nyx_tmp_workdir_path = create_nyx_tmp_workdir();
+      fsrv->out_dir_path = fsrv->nyx_tmp_workdir_path;
 
     } else {
 
-      if (fsrv->nyx_parent) {
+      if (fsrv->out_dir_path == NULL) {
 
-        fsrv->nyx_runner = fsrv->nyx_handlers->nyx_new_parent(
-            fsrv->target_path, x, fsrv->nyx_bind_cpu_id, MAX_FILE, true);
-
-      } else {
-
-        fsrv->nyx_runner = fsrv->nyx_handlers->nyx_new_child(
-            fsrv->target_path, x, fsrv->nyx_bind_cpu_id, fsrv->nyx_id);
+        NYX_PRE_FATAL(fsrv, "Nyx workdir path not found...");
 
       }
 
     }
 
-    ck_free(x);
+    /* libnyx expects an absolute path */
+    char *outdir_path_absolute = realpath(fsrv->out_dir_path, NULL);
+    if (outdir_path_absolute == NULL) {
+
+      NYX_PRE_FATAL(fsrv, "Nyx workdir path cannot be resolved ...");
+
+    }
+
+    char *workdir_path = alloc_printf("%s/workdir", outdir_path_absolute);
+
+    if (fsrv->nyx_id == 0xFFFFFFFF) {
+
+      NYX_PRE_FATAL(fsrv, "Nyx ID is not set...");
+
+    }
+
+    if (fsrv->nyx_bind_cpu_id == 0xFFFFFFFF) {
+
+      NYX_PRE_FATAL(fsrv, "Nyx CPU ID is not set...");
+
+    }
+
+    void *nyx_config = fsrv->nyx_handlers->nyx_config_load(fsrv->target_path);
+
+    fsrv->nyx_handlers->nyx_config_set_workdir_path(nyx_config, workdir_path);
+    fsrv->nyx_handlers->nyx_config_set_input_buffer_size(nyx_config, MAX_FILE);
+    fsrv->nyx_handlers->nyx_config_set_input_buffer_write_protection(nyx_config,
+                                                                     true);
+
+    char *nyx_log_path = getenv("AFL_NYX_LOG");
+    if (nyx_log_path) {
+
+      fsrv->nyx_log_fd =
+          open(nyx_log_path, O_CREAT | O_TRUNC | O_WRONLY, DEFAULT_PERMISSION);
+      if (fsrv->nyx_log_fd < 0) {
+
+        NYX_PRE_FATAL(fsrv, "AFL_NYX_LOG path could not be written");
+
+      }
+
+      fsrv->nyx_handlers->nyx_config_set_hprintf_fd(nyx_config,
+                                                    fsrv->nyx_log_fd);
+
+    }
+
+    if (fsrv->nyx_standalone) {
+
+      fsrv->nyx_handlers->nyx_config_set_process_role(nyx_config, StandAlone);
+
+    } else {
+
+      if (fsrv->nyx_parent) {
+
+        fsrv->nyx_handlers->nyx_config_set_process_role(nyx_config, Parent);
+
+      } else {
+
+        fsrv->nyx_handlers->nyx_config_set_process_role(nyx_config, Child);
+
+      }
+
+    }
+
+    if (getenv("AFL_NYX_AUX_SIZE") != NULL) {
+
+      if (fsrv->nyx_handlers->nyx_config_set_aux_buffer_size(
+              nyx_config, atoi(getenv("AFL_NYX_AUX_SIZE"))) != 1) {
+
+        NYX_PRE_FATAL(fsrv,
+                      "Invalid AFL_NYX_AUX_SIZE value set (must be a multiple "
+                      "of 4096) ...");
+
+      }
+
+    }
+
+    if (getenv("AFL_NYX_REUSE_SNAPSHOT") != NULL) {
+
+      if (access(getenv("AFL_NYX_REUSE_SNAPSHOT"), F_OK) == -1) {
+
+        NYX_PRE_FATAL(fsrv, "AFL_NYX_REUSE_SNAPSHOT path does not exist");
+
+      }
+
+      /* stupid sanity check to avoid passing an empty or invalid snapshot
+       * directory */
+      char *snapshot_file_path =
+          alloc_printf("%s/global.state", getenv("AFL_NYX_REUSE_SNAPSHOT"));
+      if (access(snapshot_file_path, R_OK) == -1) {
+
+        NYX_PRE_FATAL(fsrv,
+                      "AFL_NYX_REUSE_SNAPSHOT path does not contain a valid "
+                      "Nyx snapshot");
+
+      }
+
+      ck_free(snapshot_file_path);
+
+      /* another sanity check to avoid passing a snapshot directory that is
+       * located in the current workdir (the workdir will be wiped by libnyx on
+       * startup) */
+      char *workdir_snapshot_path =
+          alloc_printf("%s/workdir/snapshot", outdir_path_absolute);
+      char *reuse_snapshot_path_real =
+          realpath(getenv("AFL_NYX_REUSE_SNAPSHOT"), NULL);
+
+      if (strcmp(workdir_snapshot_path, reuse_snapshot_path_real) == 0) {
+
+        NYX_PRE_FATAL(
+            fsrv,
+            "AFL_NYX_REUSE_SNAPSHOT path is located in current workdir "
+            "(use another output directory)");
+
+      }
+
+      ck_free(reuse_snapshot_path_real);
+      ck_free(workdir_snapshot_path);
+
+      fsrv->nyx_handlers->nyx_config_set_reuse_snapshot_path(
+          nyx_config, getenv("AFL_NYX_REUSE_SNAPSHOT"));
+
+    }
+
+    fsrv->nyx_runner =
+        fsrv->nyx_handlers->nyx_new(nyx_config, fsrv->nyx_bind_cpu_id);
+
+    ck_free(workdir_path);
+    ck_free(outdir_path_absolute);
 
     if (fsrv->nyx_runner == NULL) { FATAL("Something went wrong ..."); }
 
@@ -440,27 +692,29 @@ void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
 
     fsrv->trace_bits =
         fsrv->nyx_handlers->nyx_get_bitmap_buffer(fsrv->nyx_runner);
+
     fsrv->nyx_handlers->nyx_option_set_reload_mode(
-        fsrv->nyx_runner, getenv("NYX_DISABLE_SNAPSHOT_MODE") == NULL);
+        fsrv->nyx_runner, getenv("AFL_NYX_DISABLE_SNAPSHOT_MODE") == NULL);
     fsrv->nyx_handlers->nyx_option_apply(fsrv->nyx_runner);
 
     fsrv->nyx_handlers->nyx_option_set_timeout(fsrv->nyx_runner, 2, 0);
     fsrv->nyx_handlers->nyx_option_apply(fsrv->nyx_runner);
+
+    fsrv->nyx_aux_string = malloc(0x1000);
+    memset(fsrv->nyx_aux_string, 0, 0x1000);
 
     /* dry run */
     fsrv->nyx_handlers->nyx_set_afl_input(fsrv->nyx_runner, "INIT", 4);
     switch (fsrv->nyx_handlers->nyx_exec(fsrv->nyx_runner)) {
 
       case Abort:
-        fsrv->nyx_handlers->nyx_shutdown(fsrv->nyx_runner);
-        FATAL("Error: Nyx abort occured...");
+        NYX_PRE_FATAL(fsrv, "Error: Nyx abort occurred...");
         break;
       case IoError:
-        FATAL("Error: QEMU-Nyx has died...");
+        NYX_PRE_FATAL(fsrv, "Error: QEMU-Nyx has died...");
         break;
       case Error:
-        fsrv->nyx_handlers->nyx_shutdown(fsrv->nyx_runner);
-        FATAL("Error: Nyx runtime error has occured...");
+        NYX_PRE_FATAL(fsrv, "Error: Nyx runtime error has occurred...");
         break;
       default:
         break;
@@ -470,7 +724,8 @@ void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
     /* autodict in Nyx mode */
     if (!ignore_autodict) {
 
-      x = alloc_printf("%s/workdir/dump/afl_autodict.txt", fsrv->out_dir_path);
+      char *x =
+          alloc_printf("%s/workdir/dump/afl_autodict.txt", fsrv->out_dir_path);
       int nyx_autodict_fd = open(x, O_RDONLY);
       ck_free(x);
 
@@ -483,8 +738,9 @@ void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
           u8 *dict = ck_alloc(f_len);
           if (dict == NULL) {
 
-            FATAL("Could not allocate %u bytes of autodictionary memory",
-                  f_len);
+            NYX_PRE_FATAL(
+                fsrv, "Could not allocate %u bytes of autodictionary memory",
+                f_len);
 
           }
 
@@ -501,7 +757,8 @@ void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
 
             } else {
 
-              FATAL(
+              NYX_PRE_FATAL(
+                  fsrv,
                   "Reading autodictionary fail at position %u with %u bytes "
                   "left.",
                   offset, len);
@@ -568,17 +825,13 @@ void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
 
     }
 
+    if (!be_quiet) { ACTF("Using AFL++ faux forkserver..."); }
     fsrv->init_child_func = afl_fauxsrv_execv;
 
   }
 
   if (pipe(st_pipe) || pipe(ctl_pipe)) { PFATAL("pipe() failed"); }
-  // add
-  if (pipe(send_pipe) || pipe(recv_pipe)) { PFATAL("pipe() failed"); }
-  // add end
-  int test_pipe[2];
-  pipe(test_pipe);
-  dup2(test_pipe[0], 333);
+
   fsrv->last_run_timed_out = 0;
   fsrv->fsrv_pid = fork();
 
@@ -666,9 +919,10 @@ void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
     if (dup2(st_pipe[1], FORKSRV_FD + 1) < 0) { PFATAL("dup2() failed"); }
     // add
     if (dup2(send_pipe[0], FORKSRV_FD + 3) < 0) { PFATAL("dup2() failed"); }
-    if (dup2(recv_pipe[1], FORKSRV_FD + 4) < 0) {  PFATAL("dup2() failed"); } 
+    if (dup2(recv_pipe[1], FORKSRV_FD + 4) < 0) { PFATAL("dup2() failed"); }
     // 子进程
     // add end
+
     close(ctl_pipe[0]);
     close(ctl_pipe[1]);
     close(st_pipe[0]);
@@ -693,70 +947,8 @@ void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
 
     if (!getenv("LD_BIND_LAZY")) { setenv("LD_BIND_NOW", "1", 1); }
 
-    /* Set sane defaults for ASAN if nothing else is specified. */
-
-    if (!getenv("ASAN_OPTIONS"))
-      setenv("ASAN_OPTIONS",
-             "abort_on_error=1:"
-             "detect_leaks=0:"
-             "malloc_context_size=0:"
-             "symbolize=0:"
-             "allocator_may_return_null=1:"
-             "detect_odr_violation=0:"
-             "handle_segv=0:"
-             "handle_sigbus=0:"
-             "handle_abort=0:"
-             "handle_sigfpe=0:"
-             "handle_sigill=0",
-             1);
-
-    /* Set sane defaults for UBSAN if nothing else is specified. */
-
-    if (!getenv("UBSAN_OPTIONS"))
-      setenv("UBSAN_OPTIONS",
-             "halt_on_error=1:"
-             "abort_on_error=1:"
-             "malloc_context_size=0:"
-             "allocator_may_return_null=1:"
-             "symbolize=0:"
-             "handle_segv=0:"
-             "handle_sigbus=0:"
-             "handle_abort=0:"
-             "handle_sigfpe=0:"
-             "handle_sigill=0",
-             1);
-
-    /* Envs for QASan */
-    setenv("QASAN_MAX_CALL_STACK", "0", 0);
-    setenv("QASAN_SYMBOLIZE", "0", 0);
-
-    /* MSAN is tricky, because it doesn't support abort_on_error=1 at this
-       point. So, we do this in a very hacky way. */
-
-    if (!getenv("MSAN_OPTIONS"))
-      setenv("MSAN_OPTIONS",
-           "exit_code=" STRINGIFY(MSAN_ERROR) ":"
-           "symbolize=0:"
-           "abort_on_error=1:"
-           "malloc_context_size=0:"
-           "allocator_may_return_null=1:"
-           "msan_track_origins=0:"
-           "handle_segv=0:"
-           "handle_sigbus=0:"
-           "handle_abort=0:"
-           "handle_sigfpe=0:"
-           "handle_sigill=0",
-           1);
-
-    /* LSAN, too, does not support abort_on_error=1. */
-
-    if (!getenv("LSAN_OPTIONS"))
-      setenv("LSAN_OPTIONS",
-            "exitcode=" STRINGIFY(LSAN_ERROR) ":"
-            "fast_unwind_on_malloc=0:"
-            "symbolize=0:"
-            "print_suppressions=0",
-            1);
+    /* Set sane defaults for sanitizers */
+    set_sanitizer_defaults();
 
     fsrv->init_child_func(fsrv, argv);
 
@@ -798,7 +990,7 @@ void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
       s32 tmp_pid = fsrv->fsrv_pid;
       if (tmp_pid > 0) {
 
-        kill(tmp_pid, fsrv->kill_signal);
+        kill(tmp_pid, fsrv->child_kill_signal);
         fsrv->fsrv_pid = -1;
 
       }
@@ -809,7 +1001,7 @@ void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
       s32 tmp_pid = fsrv->fsrv_pid;
       if (tmp_pid > 0) {
 
-        kill(tmp_pid, fsrv->kill_signal);
+        kill(tmp_pid, fsrv->child_kill_signal);
         fsrv->fsrv_pid = -1;
 
       }
@@ -844,7 +1036,7 @@ void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
 
     if ((status & FS_OPT_ENABLED) == FS_OPT_ENABLED) {
 
-      // workaround for recent afl++ versions
+      // workaround for recent AFL++ versions
       if ((status & FS_OPT_OLD_AFLPP_WORKAROUND) == FS_OPT_OLD_AFLPP_WORKAROUND)
         status = (status & 0xf0ffffff);
 
@@ -916,7 +1108,7 @@ void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
 
           FATAL(
               "Target's coverage map size of %u is larger than the one this "
-              "afl++ is set with (%u). Either set AFL_MAP_SIZE=%u and restart "
+              "AFL++ is set with (%u). Either set AFL_MAP_SIZE=%u and restart "
               " afl-fuzz, or change MAP_SIZE_POW2 in config.h and recompile "
               "afl-fuzz",
               tmp_map_size, fsrv->map_size, tmp_map_size);
@@ -1083,7 +1275,7 @@ void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
 
            "    - Less likely, there is a horrible bug in the fuzzer. If other "
            "options\n"
-           "      fail, poke <afl-users@googlegroups.com> for troubleshooting "
+           "      fail, poke the Awesome Fuzzing Discord for troubleshooting "
            "tips.\n");
 
     } else {
@@ -1128,7 +1320,7 @@ void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
 
            "    - Less likely, there is a horrible bug in the fuzzer. If other "
            "options\n"
-           "      fail, poke <afl-users@googlegroups.com> for troubleshooting "
+           "      fail, poke the Awesome Fuzzing Discord for troubleshooting "
            "tips.\n",
            stringify_mem_size(val_buf, sizeof(val_buf), fsrv->mem_limit << 20),
            fsrv->mem_limit - 1);
@@ -1178,7 +1370,7 @@ void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
          "      Retry with setting AFL_MAP_SIZE=10000000.\n\n"
 
          "Otherwise there is a horrible bug in the fuzzer.\n"
-         "Poke <afl-users@googlegroups.com> for troubleshooting tips.\n");
+         "Poke the Awesome Fuzzing Discord for troubleshooting tips.\n");
 
   } else {
 
@@ -1227,7 +1419,7 @@ void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
 
         "    - Less likely, there is a horrible bug in the fuzzer. If other "
         "options\n"
-        "      fail, poke <afl-users@googlegroups.com> for troubleshooting "
+        "      fail, poke the Awesome Fuzzing Discord for troubleshooting "
         "tips.\n",
         getenv(DEFER_ENV_VAR)
             ? "    - You are using deferred forkserver, but __AFL_INIT() is "
@@ -1247,11 +1439,11 @@ void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
 
 void afl_fsrv_kill(afl_forkserver_t *fsrv) {
 
-  if (fsrv->child_pid > 0) { kill(fsrv->child_pid, fsrv->kill_signal); }
+  if (fsrv->child_pid > 0) { kill(fsrv->child_pid, fsrv->child_kill_signal); }
   if (fsrv->fsrv_pid > 0) {
 
-    kill(fsrv->fsrv_pid, fsrv->kill_signal);
-    if (waitpid(fsrv->fsrv_pid, NULL, 0) <= 0) { WARNF("error waitpid\n"); }
+    kill(fsrv->fsrv_pid, fsrv->fsrv_kill_signal);
+    waitpid(fsrv->fsrv_pid, NULL, 0);
 
   }
 
@@ -1261,7 +1453,7 @@ void afl_fsrv_kill(afl_forkserver_t *fsrv) {
   fsrv->child_pid = -1;
 
 #ifdef __linux__
-  if (fsrv->nyx_mode) { fsrv->nyx_handlers->nyx_shutdown(fsrv->nyx_runner); }
+  afl_nyx_runner_kill(fsrv);
 #endif
 
 }
@@ -1276,20 +1468,20 @@ u32 afl_fsrv_get_mapsize(afl_forkserver_t *fsrv, char **argv,
 
 }
 
-
 // zyp
-u8 *testcase_buf;
+u8    *testcase_buf;
 size_t testcase_len;
 
-  /* Delete the current testcase and write the buf to the testcase file */
 
+/* Delete the current testcase and write the buf to the testcase file */
 
-void afl_fsrv_write_to_testcase(afl_forkserver_t *fsrv, u8 *buf, size_t len) {
-    //zyp
+void __attribute__((hot))
+afl_fsrv_write_to_testcase(afl_forkserver_t *fsrv, u8 *buf, size_t len) {
+  // zyp
   testcase_buf = buf;
   testcase_len = len;
-  //return;
-
+  printf("afl_fsrv_write_to_testcase called, len=%d \n", len);
+  // return;
 #ifdef __linux__
   if (unlikely(fsrv->nyx_mode)) {
 
@@ -1403,27 +1595,26 @@ void afl_fsrv_write_to_testcase(afl_forkserver_t *fsrv, u8 *buf, size_t len) {
 
 }
 
-
+//add
 #include <arpa/inet.h>
 #include <poll.h>
-#include <sys/time.h>                       // for gettimeofday
-//#include <afl-fuzz.h>
+#include <sys/time.h>  // for gettimeofday
+// #include <afl-fuzz.h>
 enum {
   /* 00 */ PRO_TCP,
   /* 01 */ PRO_UDP
 };
 // zyp
 u8  use_net = 0;
-u8  net_protocol = PRO_TCP;     // 采用的协议
-u8 *net_ip = "127.0.0.1";       // 连接的ip地址
-u32 net_port = 10001;           // 端口
-u32 reconnect_num = 1000;        // 多少input重连一次
-u32 socket_timeout_usecs = 1000;     // 连接的等待时间 in us 
-u32 wait_after_send_one_usecs = 10;  // 发送完一个种子中一块内容后的等待时间in us
-u32 wait_after_sendusecs = 1;        // 发送完一个种子所有内容后的等待时间in us
+u8  net_protocol = PRO_TCP;       // 采用的协议
+u8 *net_ip = "127.0.0.1";         // 连接的ip地址
+u32 net_port = 10001;             // 端口
+u32 reconnect_num = 1000;         // 多少input重连一次
+u32 socket_timeout_usecs = 1000;  // 连接的等待时间 in us
+u32 wait_after_send_one_usecs =
+    10;  // 发送完一个种子中一块内容后的等待时间in us
+u32 wait_after_sendusecs = 1;  // 发送完一个种子所有内容后的等待时间in us
 u32 new_start_server_waitusecs = 1000000;  // 重启服务器后的等待时间 in us
-
-
 
 int net_send(int sockfd, struct timeval timeout, char *mem, unsigned int len) {
   unsigned int  byte_count = 0;
@@ -1454,18 +1645,18 @@ int net_send(int sockfd, struct timeval timeout, char *mem, unsigned int len) {
   rv = poll(pfd, 1, 0);  // 立刻返回
   int readn = 0;
   if (rv > 0) {
-    if (pfd[0].revents & POLLIN) { 
-        readn = read(sockfd, buf, sizeof(buf));
-        if (readn == -1) { 
-            // 可能太多了打印了
-            //perror("wrong read"); 
-        }
+    if (pfd[0].revents & POLLIN) {
+      readn = read(sockfd, buf, sizeof(buf));
+      if (readn == -1) {
+        // 可能太多了打印了
+        // perror("wrong read");
+      }
     }
   }
 
   return byte_count;
 }
-//add
+// add
 void send_udp_hook() {
   int                sockfd;
   struct sockaddr_in servaddr;
@@ -1477,8 +1668,9 @@ void send_udp_hook() {
     perror("socket creation failed");
     exit(EXIT_FAILURE);
   }
-   int option_value = 1;
-  if (setsockopt(sockfd, IPPROTO_IP, IP_PKTINFO, &option_value,sizeof(option_value)) == -1) {
+  int option_value = 1;
+  if (setsockopt(sockfd, IPPROTO_IP, IP_PKTINFO, &option_value,
+                 sizeof(option_value)) == -1) {
     perror("setsockopt");
     close(sockfd);
     exit(EXIT_FAILURE);
@@ -1497,14 +1689,14 @@ void send_udp_hook() {
     perror("sendto failed");
     exit(EXIT_FAILURE);
   }
-  printf("UDP packet sent to %s:%d\n",net_ip,net_port );
+  printf("UDP packet sent to %s:%d\n", net_ip, net_port);
   // 关闭套接字
   close(sockfd);
 }
-//add
+// add
 void send_tcp_hook() {
-  int    sockfd;
-  char   buffer[6] = "hook ";
+  int  sockfd;
+  char buffer[6] = "hook ";
   sockfd = socket(AF_INET, SOCK_STREAM, 0);
   if (sockfd == -1) {
     perror("Socket creation failed");
@@ -1525,36 +1717,36 @@ void send_tcp_hook() {
     close(sockfd);
     return 1;
   }
-  printf("TCP packet sent to %s:%d\n",net_ip,net_port);
+  printf("TCP packet sent to %s:%d\n", net_ip, net_port);
   close(sockfd);
 }
 
-    // zyp modfied from aflnet
+// zyp modfied from aflnet
 int send_over_network() {
   int                n;
   u8                 likely_buggy = 0;
   struct sockaddr_in serv_addr;
 
   // Clean up the server if needed
-  //if (cleanup_script) system(cleanup_script);
+  // if (cleanup_script) system(cleanup_script);
 
   // Wait a bit for the server initialization
-  //usleep(server_wait_usecs);
+  // usleep(server_wait_usecs);
 
   // Create a TCP/UDP socket
   static int sockfd = -1;
   static int current_input_num = 0;
 
-  if (current_input_num % reconnect_num == 0) { 
-      if (sockfd != -1) { 
-          close(sockfd);
-          sockfd = -1;
-      }
-      current_input_num = 0;
+  if (current_input_num % reconnect_num == 0) {
+    if (sockfd != -1) {
+      close(sockfd);
+      sockfd = -1;
+    }
+    current_input_num = 0;
   }
   ++current_input_num;
 
-   // Set timeout for socket data sending/receiving -- otherwise it causes a
+  // Set timeout for socket data sending/receiving -- otherwise it causes a
   // big delay if the server is still alive after processing all the requests
   struct timeval timeout;
   timeout.tv_sec = 0;
@@ -1580,7 +1772,7 @@ int send_over_network() {
     if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
       // If it cannot connect to the server under test
       // try it again as the server initial startup time is varied
-    
+
       for (n = 0; n < 1000; n++) {
         if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) ==
             0)
@@ -1597,19 +1789,19 @@ int send_over_network() {
   }
 
   n = net_send(sockfd, timeout, testcase_buf, testcase_len);
-  if (n == -1) { 
-      if (sockfd != -1) { 
-          close(sockfd);
-          sockfd = -1;
-      }
-      return 1;
+  if (n == -1) {
+    if (sockfd != -1) {
+      close(sockfd);
+      sockfd = -1;
+    }
+    return 1;
   }
 
   usleep(wait_after_sendusecs);
 
   // wait a bit letting the server to complete its remaing task(s)
-  //memset(session_virgin_bits, 255, afl->fsrv.map_size);
-  //while (1) {
+  // memset(session_virgin_bits, 255, afl->fsrv.map_size);
+  // while (1) {
   //  if (has_new_bits(session_virgin_bits) != 2) break;
   //}
 
@@ -1618,35 +1810,34 @@ int send_over_network() {
 
 // 0 not existing, 1 existing
 u8 exist_pid(int pid) {
-  if (pid == -1 || pid == 0) { 
-      return 0;
-  }
+  if (pid == -1 || pid == 0) { return 0; }
   int killres = kill(pid, 0);
   int errnon = errno;
-  if (killres == 0) { 
-      return 1;      // the process is existing and is child
-  }else if (killres == -1) { 
-      if (errnon == ESRCH) { 
-          return 0;  // the process is not existing
-      } else if (errnon == EPERM) {
-          return 0;  // the process is existing but is not child
-      } else {
-          return 0;  // should not happen
-      }
-    
-  } 
-
+  if (killres == 0) {
+    return 1;  // the process is existing and is child
+  } else if (killres == -1) {
+    if (errnon == ESRCH) {
+      return 0;  // the process is not existing
+    } else if (errnon == EPERM) {
+      return 0;  // the process is existing but is not child
+    } else {
+      return 0;  // should not happen
+    }
+  }
 }
+
 
 /* Execute target application, monitoring for timeouts. Return status
    information. The called program will update afl->fsrv->trace_bits. */
 
-fsrv_run_result_t afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
-                                      volatile u8 *stop_soon_p) {
+fsrv_run_result_t __attribute__((hot))
+afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
+                    volatile u8 *stop_soon_p) {
 
   s32 res;
   u32 exec_ms;
   u32 write_value = fsrv->last_run_timed_out;
+
 #ifdef __linux__
   if (fsrv->nyx_mode) {
 
@@ -1673,15 +1864,14 @@ fsrv_run_result_t afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
       case Crash:
       case Asan:
         return FSRV_RUN_CRASH;
-      case Timout:
+      case Timeout:
         return FSRV_RUN_TMOUT;
       case InvalidWriteToPayload:
         /* ??? */
         FATAL("FixMe: Nyx InvalidWriteToPayload handler is missing");
         break;
       case Abort:
-        fsrv->nyx_handlers->nyx_shutdown(fsrv->nyx_runner);
-        FATAL("Error: Nyx abort occured...");
+        FATAL("Error: Nyx abort occurred...");
       case IoError:
         if (*stop_soon_p) {
 
@@ -1695,7 +1885,7 @@ fsrv_run_result_t afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
 
         break;
       case Error:
-        FATAL("Error: Nyx runtime error has occured...");
+        FATAL("Error: Nyx runtime error has occurred...");
         break;
 
     }
@@ -1718,26 +1908,20 @@ fsrv_run_result_t afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
   }
 
 #else
-
   memset(fsrv->trace_bits, 0, fsrv->map_size);
   MEM_BARRIER();
 #endif
 
   /* we have the fork server (or faux server) up and running
   First, tell it if the previous run timed out. */
-
   u8 need_new_prog = 0;
-  u8        is_new_start = 0;
-
-  if (use_net) { //zyp
-      if (!need_new_prog) {
-         if (!exist_pid(fsrv->child_pid)) { 
-             need_new_prog = 1; 
-         }
-      }
+  u8 is_new_start = 0;
+  if (use_net) {  // zyp
+    if (!need_new_prog) {
+      if (!exist_pid(fsrv->child_pid)) { need_new_prog = 1; }
+    }
   }
-
-  if (!use_net || (use_net && need_new_prog)) { //zyp
+  if (!use_net || (use_net && need_new_prog)) {  // zyp
 
     if ((res = write(fsrv->fsrv_ctl_fd, &write_value, 4)) != 4) {
       if (*stop_soon_p) { return 0; }
@@ -1787,54 +1971,73 @@ fsrv_run_result_t afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
     FATAL("Fork server is misbehaving (OOM?)");
 
   }
-
   // zyp
-  if (is_new_start) { 
-      usleep(new_start_server_waitusecs);
+  if (is_new_start) {
+    usleep(new_start_server_waitusecs);
     if (net_protocol == 1) {
       send_udp_hook();
     } else {
       send_tcp_hook();
     }
-      //add connection
-      //send hook
+    // add connection
+    // send hook
   }
 
-  if (use_net) { 
-      struct timeval start;
-      struct timeval end;
-      unsigned long  timer;
-      gettimeofday(&start, NULL);
-      //send_over_network();
-      //add
-      int  check_send;
-      char buf[4];
-      if ((check_send = read(recv_pipe[0], buf, 4)) != 4) {
-      WARNF("don't recv from hook ");
-      }
-      
-      if ((check_send = write(send_pipe[1], "HALO", 4)) < 0) {
+  if (use_net) {
+    struct timeval start;
+    struct timeval end;
+    unsigned long  timer;
+    gettimeofday(&start, NULL);
+    // send_over_network();
+    // add
+    int  check_send;
+    char buf[4];
+
+    if ((check_send = write(send_pipe[1], "HALO", 4)) < 0) {
       WARNF("Unable to write ");
-      }
-      /*char buf4[4];
-      int  res = 0;
-      if ((res = read(FORKSRV_FD + 3, buf4, 4)) < 0) {
-      perror("Don't recv hello?(OOM?)\n");
-      _exit(1);
-      }*/
-     
-      // ADD END
-      gettimeofday(&end, NULL);
-      timer = (1000000 * (end.tv_sec - start.tv_sec) + end.tv_usec - start.tv_usec) / 1000; // in ms
-      exec_ms = MAX(1,timer);
+    }
+
+    // 改为处理完当前种子hook端再向fuzzer发消息，因此这里同样需要等待完成
+    u32 dummyv = 0;
+    exec_ms = read_s32_timed(recv_pipe[0], &dummyv, timeout, stop_soon_p);
+    printf("afl-fuzz read from hook success, exec_ms=%d\n", exec_ms);
+    if (exec_ms == 1001) {
+      printf("\n");
+    } else if (exec_ms == 71) {
+      printf("\n");
+    }
+    // if ((check_send = read(recv_pipe[0], buf, 4)) != 4) {
+    //   WARNF("don't recv from hook ");
+    // }
+
+    /*char buf4[4];
+    int  res = 0;
+    if ((res = read(FORKSRV_FD + 3, buf4, 4)) < 0) {
+    perror("Don't recv hello?(OOM?)\n");
+    _exit(1);
+    }*/
+
+    // ADD END
+    // gettimeofday(&end, NULL);
+    // timer = (1000000 * (end.tv_sec - start.tv_sec) + end.tv_usec -
+    // start.tv_usec) / 1000; // in ms exec_ms = MAX(1,timer);
   } else {
     exec_ms = read_s32_timed(fsrv->fsrv_st_fd, &fsrv->child_status, timeout,
                              stop_soon_p);
   }
 
-    // zyp
-  if (use_net && !exist_pid(fsrv->child_pid)) { 
-      return FSRV_RUN_CRASH; 
+  // zyp
+  if (use_net && !exist_pid(fsrv->child_pid)) { return FSRV_RUN_CRASH; }
+
+  // zyp
+  // 如果timeout但是child进程没有crash，则重新发起一个新连接send hook即可
+  if (use_net && exec_ms > timeout) {
+    if (net_protocol == 1) {
+      send_udp_hook();
+    } else {
+      send_tcp_hook();
+    }
+    return FSRV_RUN_TMOUT;
   }
 
   if (!use_net) {
@@ -1844,7 +2047,7 @@ fsrv_run_result_t afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
 
       s32 tmp_pid = fsrv->child_pid;
       if (tmp_pid > 0) {
-        kill(tmp_pid, fsrv->kill_signal);
+        kill(tmp_pid, fsrv->child_kill_signal);
         fsrv->child_pid = -1;
       }
 
@@ -1881,7 +2084,7 @@ fsrv_run_result_t afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
 
   }
 
-  //zyp comment
+  // zyp comment
   if (!use_net) {
     if (!WIFSTOPPED(fsrv->child_status)) { fsrv->child_pid = -1; }
   }
@@ -1896,7 +2099,6 @@ fsrv_run_result_t afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
 
   /* Report outcome to caller. */
 
-
   /* Was the run unsuccessful? */
   if (unlikely(*(u32 *)fsrv->trace_bits == EXEC_FAIL_SIG)) {
 
@@ -1907,7 +2109,7 @@ fsrv_run_result_t afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
   /* Did we timeout? */
   if (unlikely(fsrv->last_run_timed_out)) {
 
-    fsrv->last_kill_signal = fsrv->kill_signal;
+    fsrv->last_kill_signal = fsrv->child_kill_signal;
     return FSRV_RUN_TMOUT;
 
   }
@@ -1918,49 +2120,55 @@ fsrv_run_result_t afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
   abort_on_error. On top, a user may specify a custom AFL_CRASH_EXITCODE.
   Handle all three cases here. */
 
-  if (!use_net) {
-    if (unlikely(
-            /* A normal crash/abort */
-            (WIFSIGNALED(fsrv->child_status)) ||
-            /* special handling for msan and lsan */
-            (fsrv->uses_asan &&
-             (WEXITSTATUS(fsrv->child_status) == MSAN_ERROR ||
-              WEXITSTATUS(fsrv->child_status) == LSAN_ERROR)) ||
-            /* the custom crash_exitcode was returned by the target */
-            (fsrv->uses_crash_exitcode &&
-             WEXITSTATUS(fsrv->child_status) == fsrv->crash_exitcode))) {
+  if (unlikely(
+          /* A normal crash/abort */
+          (WIFSIGNALED(fsrv->child_status)) ||
+          /* special handling for msan and lsan */
+          (fsrv->uses_asan &&
+           (WEXITSTATUS(fsrv->child_status) == MSAN_ERROR ||
+            WEXITSTATUS(fsrv->child_status) == LSAN_ERROR)) ||
+          /* the custom crash_exitcode was returned by the target */
+          (fsrv->uses_crash_exitcode &&
+           WEXITSTATUS(fsrv->child_status) == fsrv->crash_exitcode))) {
+
 #ifdef AFL_PERSISTENT_RECORD
-      if (unlikely(fsrv->persistent_record)) {
-        char fn[PATH_MAX];
-        u32  i, writecnt = 0;
-        for (i = 0; i < fsrv->persistent_record; ++i) {
-          u32 entry =
-              (i + fsrv->persistent_record_idx) % fsrv->persistent_record;
-          u8 *data = fsrv->persistent_record_data[entry];
-          u32 len = fsrv->persistent_record_len[entry];
-          if (likely(len && data)) {
-            snprintf(fn, sizeof(fn), "%s/RECORD:%06u,cnt:%06u",
-                     fsrv->persistent_record_dir, fsrv->persistent_record_cnt,
-                     writecnt++);
-            int fd = open(fn, O_CREAT | O_TRUNC | O_WRONLY, 0644);
-            if (fd >= 0) {
-              ck_write(fd, data, len, fn);
-              close(fd);
-            }
+    if (unlikely(fsrv->persistent_record)) {
+
+      char fn[PATH_MAX];
+      u32  i, writecnt = 0;
+      for (i = 0; i < fsrv->persistent_record; ++i) {
+
+        u32 entry = (i + fsrv->persistent_record_idx) % fsrv->persistent_record;
+        u8 *data = fsrv->persistent_record_data[entry];
+        u32 len = fsrv->persistent_record_len[entry];
+        if (likely(len && data)) {
+
+          snprintf(fn, sizeof(fn), "%s/RECORD:%06u,cnt:%06u",
+                   fsrv->persistent_record_dir, fsrv->persistent_record_cnt,
+                   writecnt++);
+          int fd = open(fn, O_CREAT | O_TRUNC | O_WRONLY, 0644);
+          if (fd >= 0) {
+
+            ck_write(fd, data, len, fn);
+            close(fd);
+
           }
+
         }
 
-        ++fsrv->persistent_record_cnt;
       }
+
+      ++fsrv->persistent_record_cnt;
+
+    }
 
 #endif
 
-      /* For a proper crash, set last_kill_signal to WTERMSIG, else set it to 0
-       */
-      fsrv->last_kill_signal =
-          WIFSIGNALED(fsrv->child_status) ? WTERMSIG(fsrv->child_status) : 0;
-      return FSRV_RUN_CRASH;
-    }
+    /* For a proper crash, set last_kill_signal to WTERMSIG, else set it to 0 */
+    fsrv->last_kill_signal =
+        WIFSIGNALED(fsrv->child_status) ? WTERMSIG(fsrv->child_status) : 0;
+    return FSRV_RUN_CRASH;
+
   }
 
   /* success :) */

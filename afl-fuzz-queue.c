@@ -583,19 +583,19 @@ static u8 check_if_text(afl_state_t *afl, struct queue_entry *q) {
 
 /* Append new test case to the queue. */
 
-void add_to_queue(afl_state_t *afl, u8 *fname, u32 len, u8 passed_det) {
-
+void add_to_queue(afl_state_t *afl, u8 *fname, u32 len, u8 passed_det) { //xzw:这里是进入队列，计算长度的
   struct queue_entry *q =
       (struct queue_entry *)ck_alloc(sizeof(struct queue_entry));
+  //xzw
+    u8 packet_fuzz=1;
 
-  q->fname = fname;
-  q->len = len;
-  q->depth = afl->cur_depth + 1;
-  q->passed_det = passed_det;
-  q->trace_mini = NULL;
-  q->testcase_buf = NULL;
-  q->mother = afl->queue_cur;
-
+    q->fname = fname;
+    q->len = len;
+    q->depth = afl->cur_depth + 1;
+    q->passed_det = passed_det;
+    q->trace_mini = NULL;
+    q->testcase_buf = NULL;
+    q->mother = afl->queue_cur;
 #ifdef INTROSPECTION
   q->bitsmap_size = afl->bitsmap_size;
 #endif
@@ -1226,7 +1226,7 @@ inline void queue_testcase_retake_mem(afl_state_t *afl, struct queue_entry *q,
 
 /* Returns the testcase buf from the file behind this queue entry.
   Increases the refcount. */
-
+//xzw:通过q去维持一个queue来获取种子
 inline u8 *queue_testcase_get(afl_state_t *afl, struct queue_entry *q) {
 
   u32 len = q->len;

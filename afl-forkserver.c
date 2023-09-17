@@ -1578,8 +1578,8 @@ afl_fsrv_write_to_testcase(afl_forkserver_t *fsrv, u8 *buf, size_t len) {
     }
 
     // fprintf(stderr, "WRITE %d %u\n", fd, len);
-    ck_write(fd, buf, len, fsrv->out_file);
-
+    ck_write(fd, buf, len, fsrv->out_file);    //xzw:这里是真正写入的地方，到时候要modified的地方
+                                               //fd实际上就是.cut_input，关注buf的来源
     if (fsrv->use_stdin) {
 
       if (ftruncate(fd, len)) { PFATAL("ftruncate() failed"); }

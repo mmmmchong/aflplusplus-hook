@@ -1773,7 +1773,7 @@ int main(int argc, char **argv_orig, char **envp) {
 
     WARNF(
         "LD_PRELOAD is set, are you sure that is what you want to do "
-        "instead of using AFL_PRELOAD?");
+        "instead of using AFL_PRELOAD?  haha i have recv_hook.so!");
 
   }
 
@@ -1843,7 +1843,7 @@ int main(int argc, char **argv_orig, char **envp) {
 
   if (getenv("AFL_LD_PRELOAD")) {
 
-    FATAL("Use AFL_PRELOAD instead of AFL_LD_PRELOAD");
+    FATAL("Use AFL_PRELOAD instead of AFL_LD_PRELOAD ");
 
   }
 
@@ -2011,7 +2011,7 @@ int main(int argc, char **argv_orig, char **envp) {
 
   setup_cmdline_file(afl, argv + optind);
 
-  read_testcases(afl, NULL);
+  read_testcases(afl, NULL);  //xzw:获取我们给的种子?
   // read_foreign_testcases(afl, 1); for the moment dont do this
   OKF("Loaded a total of %u seeds.", afl->queued_items);
 
@@ -2053,6 +2053,12 @@ int main(int argc, char **argv_orig, char **envp) {
 
   /* If we don't have a file name chosen yet, use a safe default. */
  //add
+ //xzw:因为我们种子的颗粒级已经到包了 能不能把维持包的队列，q队列的情况告知fuzz端，
+ // 这样fuzz端可以知道种子的明确情况，包括包的
+ //个数和长度，这样可以大大减小变异导致包不合法的问题。
+ //方法想到了
+ //我们有记录种子的.num_cur_input，我们完全可以多写一点种子的信息进去，
+ //比如说包的个数与各个包的长度，这就解决了fuzz端获取队列信息的问题。
   extern u8 *num_filename;
  num_filename = alloc_printf("%s/.num_cur_input", afl->tmp_dir);
   if (!afl->fsrv.out_file) {
@@ -2385,7 +2391,7 @@ int main(int argc, char **argv_orig, char **envp) {
   if (likely(!afl->afl_env.afl_no_startup_calibration)) {
 
     perform_dry_run(afl);
-
+    //xzw:结合calibrate去跑一下我们给的种子
   } else {
 
     ACTF("skipping initial seed calibration due option override");
@@ -2523,11 +2529,6 @@ int main(int argc, char **argv_orig, char **envp) {
 
         if (unlikely(curdate->tm_mon == 3 && curdate->tm_mday == 1)) {
 
-          afl->pizza_is_served = 1;
-
-        } else {
-
-          afl->pizza_is_served = 0;
 
         }
 

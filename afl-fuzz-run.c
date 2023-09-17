@@ -79,8 +79,9 @@ fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
    rewound and truncated. */
 u8*num_filename;  // zyp
 u32 __attribute__((hot))
-write_to_testcase(afl_state_t *afl, void **mem, u32 len, u32 fix) {
-
+write_to_testcase(afl_state_t *afl, void **mem, u32 len, u32 fix) {  
+    //xzw TODO:这里应该要用算法来抓取合适的包并且组成一个种子，抓取的包应该由强化学习exp3来决定
+    //
   u8 sent = 0;
 
   if (unlikely(afl->custom_mutators_count)) {
@@ -1082,7 +1083,8 @@ abort_trimming:
 /* Write a modified test case, run program, process results. Handle
    error conditions, returning 1 if it's time to bail out. This is
    a helper function for fuzz_one(). */
-
+//xzw:common_fuzz_stuff会去检验变异出的包的合法性，如果有一堆的timeout就会导致变异出的seed被丢弃
+//xzw:如果按我们的逻辑是否应该把变异的包剔除？
 u8 __attribute__((hot))
 common_fuzz_stuff(afl_state_t *afl, u8 *out_buf, u32 len) {
 

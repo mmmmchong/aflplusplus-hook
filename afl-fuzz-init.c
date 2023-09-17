@@ -650,7 +650,6 @@ void read_foreign_testcases(afl_state_t *afl, int first) {
   }
 
 }
-
 /* Read all testcases from the input directory, then queue them for testing.
    Called at startup. */
 
@@ -661,14 +660,30 @@ void read_testcases(afl_state_t *afl, u8 *directory) {
   u32             i;
   u8             *fn1, *dir = directory;
   u8              val_buf[2][STRINGIFY_VAL_SIZE_MAX];
+  //xzw
+  u8 need_to_add=0;
+  u8 packet_fuzz=1;
+  u32       pre_cnt = 0;
+  u32       rep_cnt = 0;
+  u32       non_cnt = 0;
+  static u8 seed_cnt = 0; 
+  if (packet_fuzz) {
+    // xzw
+
+    for (int round = 0; round < MAX_PACKET; round++) {
+      pre_q[round] = (struct packet_queue *)malloc(sizeof(struct packet_queue));
+      rep_q[round] = (struct packet_queue *)malloc(sizeof(struct packet_queue));
+      non_q[round] = (struct packet_queue *)malloc(sizeof(struct packet_queue));
+    }
+  }
 
   /* Auto-detect non-in-place resumption attempts. */
 
   if (dir == NULL) {
 
     fn1 = alloc_printf("%s/queue", afl->in_dir);
-    if (!access(fn1, F_OK)) {
-
+    if (!access(fn1, F_OK)) {  //xzw:检查是否存在input_dir/queue文件
+        
       afl->in_dir = fn1;
       subdirs = 0;
 
@@ -688,7 +703,13 @@ void read_testcases(afl_state_t *afl, u8 *directory) {
      the ordering of test cases would vary somewhat randomly and would be
      difficult to control. */
 
-  nl_cnt = scandir(dir, &nl, NULL, alphasort);
+  nl_cnt = scandir(dir, &nl, NULL, alphasort);  
+
+  /*/ int j;
+  for (j = 0; j < nl_cnt; j++) {
+    printf("%s\n", nl[j]->d_name);
+  }*/
+
 
   if (nl_cnt < 0 && directory == NULL) {
 
@@ -731,7 +752,7 @@ void read_testcases(afl_state_t *afl, u8 *directory) {
       i = 0;
 
     }
-
+    
     do {
 
       if (unlikely(afl->in_place_resume)) { --i; }
@@ -743,17 +764,19 @@ void read_testcases(afl_state_t *afl, u8 *directory) {
       u8 *fn2 = alloc_printf("%s/%s", dir, nl[i]->d_name);
 
       u8 passed_det = 0;
+     
 
-      if (lstat(fn2, &st) || access(fn2, R_OK)) {
-
+      if (lstat(fn2, &st) || access(fn2, R_OK)) { 
+       
         PFATAL("Unable to access '%s'", fn2);
 
       }
+      
 
       /* obviously we want to skip "descending" into . and .. directories,
          however it is a good idea to skip also directories that start with
          a dot */
-      if (subdirs && S_ISDIR(st.st_mode) && nl[i]->d_name[0] != '.') {
+      if (subdirs && S_ISDIR(st.st_mode) && nl[i]->d_name[0] != '.') {      //xzw:检索子目录下是否有？
 
         free(nl[i]);                                         /* not tracked */
         read_testcases(afl, fn2);
@@ -780,15 +803,102 @@ void read_testcases(afl_state_t *afl, u8 *directory) {
 
       }
 
+
+      // xzw
+      if (packet_fuzz) {
+        if (strlen(nl[i]->d_name) < 3) {
+          PFATAL("Wrong filename formate, in packet_fuzz you need to add ",
+                 "prefix to tell fuzz the type of packet\n");
+        }
+        if (nl[i]->d_name[0] == 'p' && nl[i]->d_name[1] == 'r' &&
+            nl[i]->d_name[2] == 'e') {
+          pre_q[pre_cnt]->fname = alloc_printf(dir,ck_strdup(nl[i]->d_name));
+          pre_q[pre_cnt]->len = st.st_size >= MAX_FILE ? MAX_FILE : st.st_size;
+          pre_q[pre_cnt]->id = pre_cnt;
+          pre_cnt++;
+        }
+        if (nl[i]->d_name[0] == 'r' && nl[i]->d_name[1] == 'e' &&
+            nl[i]->d_name[2] == 'p') {
+          rep_q[rep_cnt]->fname = alloc_printf(dir, ck_strdup(nl[i]->d_name));
+          rep_q[rep_cnt]->len = st.st_size >= MAX_FILE ? MAX_FILE : st.st_size;
+          rep_q[rep_cnt]->id = rep_cnt;
+          rep_cnt++;
+        }
+        if (nl[i]->d_name[0] == 'n' && nl[i]->d_name[1] == 'o' &&
+            nl[i]->d_name[2] == 'n') {
+          non_q[non_cnt]->fname = alloc_printf(dir, ck_strdup(nl[i]->d_name));
+          non_q[non_cnt]->len = st.st_size >= MAX_FILE ? MAX_FILE : st.st_size;
+          non_q[non_cnt]->id = non_cnt;
+          non_cnt++;
+        }
+        goto next_entry;
+      }
+
+
       /* Check for metadata that indicates that deterministic fuzzing
          is complete for this entry. We don't want to repeat deterministic
          fuzzing when resuming aborted scans, because it would be pointless
          and probably very time-consuming. */
-
+    to_add:
       if (!access(dfn, F_OK)) { passed_det = 1; }
 
+      //xzw
+      if (packet_fuzz ) { 
+          for (int rep = 1; rep <= rep_cnt; rep++) {
+          seed_cnt += rep * pre_cnt * non_cnt; 
+         }
+          for (int pre = 0; pre < pre_cnt; pre++) {
+
+            for(int rep = 0;rep < rep_cnt; rep++){
+
+                for (int non=0;non<non_cnt;non++){
+              
+                FILE *pre_file = fopen(pre_q[pre]->fname, "r");
+                FILE *rep_file = fopen(rep_q[pre]->fname, "r");
+                FILE *non_file = fopen(non_q[pre]->fname, "r");
+                
+
+                u8 *filename = alloc_printf("%s/modified_seed_%d_%d_%d",dir,pre,rep,non );
+                
+                FILE *modified_file = fopen(filename, "w");
+
+                if (modified_file == NULL) {
+                  PFATAL("Can't create file:%s", filename);
+                }
+
+                u32 packet_length =pre_q[pre]->len + rep_q[rep]->len + non_q[non]->len;
+                
+                int c;
+
+                while ((c = fgetc(pre_file)) != EOF) {
+                  fputc(c, modified_file);
+                }
+
+                while ((c = fgetc(rep_file)) != EOF) {
+                  fputc(c, modified_file);
+                }
+
+                while ((c = fgetc(non_file)) != EOF) {
+                  fputc(c, modified_file);
+                }
+
+                fclose(pre_file);
+                fclose(rep_file);
+                fclose(non_file);
+                fclose(modified_file);
+
+                add_to_queue(afl, filename, packet_length >= MAX_FILE ? MAX_FILE : packet_length, passed_det);
+                }
+            }
+          }
+          /* for (int packet = 0; packet < seed_cnt; packet++) {
+          u8 *filename = alloc_printf("modified_seed_%d", seed_cnt);
+          add_to_queue(afl, filename, (pre_q[0]->len + rep_q[0]->len + non_q[0]->len),passed_det);
+          }*/
+      } else {
       add_to_queue(afl, fn2, st.st_size >= MAX_FILE ? MAX_FILE : st.st_size,
                    passed_det);
+      }
 
       if (unlikely(afl->shm.cmplog_mode)) {
 
@@ -813,18 +923,25 @@ void read_testcases(afl_state_t *afl, u8 *directory) {
         }
 
       }
-
+      if (need_to_add) { break; }
     next_entry:
       if (unlikely(afl->in_place_resume)) {
+
 
         if (unlikely(i == 0)) { done = 1; }
 
       } else {
 
-        if (unlikely(++i >= (u32)nl_cnt)) { done = 1; }
+        if (unlikely(++i >= (u32)nl_cnt) ) { 
+            done = 1;
+            need_to_add=1;
+          if (need_to_add) { 
+              goto to_add;
+          }
+        }
 
       }
-
+      //xzw
     } while (!done);
 
   }
@@ -897,7 +1014,8 @@ void perform_dry_run(afl_state_t *afl) {
 
     ACTF("Attempting dry run with '%s'...", fn);
 
-    fd = open(q->fname, O_RDONLY);
+    fd = open(q->fname, O_RDONLY);                          
+
     if (fd < 0) { PFATAL("Unable to open '%s'", q->fname); }
 
     u32 read_len = MIN(q->len, (u32)MAX_FILE);
@@ -1405,7 +1523,8 @@ void pivot_inputs(afl_state_t *afl) {
 
     if (unlikely(q->disabled)) { continue; }
 
-    u8 *nfn, *rsl = strrchr(q->fname, '/');
+    u8 *nfn, *rsl = strrchr(q->fname, '/');  
+                                               
     u32 orig_id;
 
     if (!rsl) {
@@ -1469,7 +1588,7 @@ void pivot_inputs(afl_state_t *afl) {
 
       }
 
-      nfn = alloc_printf("%s/queue/id:%06u,time:0,execs:%llu,orig:%s",
+      nfn = alloc_printf("%s/queue/id:%06u,time:0,execs:%llu,orig:%s",     ///xzw:创建种子
                          afl->out_dir, id, afl->fsrv.total_execs, use_name);
 
 #else
@@ -2274,7 +2393,7 @@ void setup_stdio_file(afl_state_t *afl) {
   }
 
   unlink(afl->fsrv.out_file);                              /* Ignore errors */
-
+  //xzw:O.o
   afl->fsrv.out_fd =
       open(afl->fsrv.out_file, O_RDWR | O_CREAT | O_EXCL, DEFAULT_PERMISSION);
 

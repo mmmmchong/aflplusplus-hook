@@ -40,8 +40,10 @@ u64 time_spent_working = 0;
 
 /* Execute target application, monitoring for timeouts. Return status
    information. The called program will update afl->fsrv->trace_bits. */
-
-fsrv_run_result_t __attribute__((hot))
+//xzw
+u32 test_bitmap_size;
+u8  is_new_start = 1;
+    fsrv_run_result_t __attribute__((hot))
 fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
 
 #ifdef PROFILING
@@ -58,13 +60,34 @@ fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
 
 #endif
   u32    max_bitsize = 0;
-  fsrv_run_result_t res = afl_fsrv_run_target(fsrv, timeout, &afl->stop_soon);
-//add
-  u32   test_bitmap_size = count_bytes(afl, afl->fsrv.trace_bits);
+  /* extern u8 pre_cnt;
+  if (is_new_start) {
+    u8 *mem = get_packet_by_id(0, pre_cnt, 0);
+    afl_fsrv_write_to_testcase(fsrv, mem, pre_q[0]->len);
+    ck_free(mem);
+  }*/
+  extern u8 need_send_pre_packet;
+  if (need_send_pre_packet) { 
+      send_pre_packet(afl);
+    need_send_pre_packet = 0;
+  }
+      fsrv_run_result_t res =
+          afl_fsrv_run_target(fsrv, timeout, &afl->stop_soon);
+      //add
+ test_bitmap_size = count_bytes(afl, afl->fsrv.trace_bits);
   if (test_bitmap_size > max_bitsize) { max_bitsize = test_bitmap_size;
   }
-  printf("max_bitmap_size:%u\n", max_bitsize);
+  printf("bitmap_size:%u\n", test_bitmap_size);
+
   //add
+  //xzw
+  /* extern u8 need_send_pre_packet;
+  if (need_send_pre_packet) { 
+      send_pre_packet(afl); 
+       afl_fsrv_run_target(fsrv, timeout, &afl->stop_soon);
+  }*/
+
+
 #ifdef PROFILING
   clock_gettime(CLOCK_REALTIME, &spec);
   time_spent_start = (spec.tv_sec * 1000000000) + spec.tv_nsec;
@@ -77,12 +100,18 @@ fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
 /* Write modified data to file for testing. If afl->fsrv.out_file is set, the
    old file is unlinked and a new one is created. Otherwise, afl->fsrv.out_fd is
    rewound and truncated. */
-u8*num_filename;  // zyp
+//xzw:mem就是包的buffer
+u8  *num_filename;  // zyp
 u32 __attribute__((hot))
-write_to_testcase(afl_state_t *afl, void **mem, u32 len, u32 fix) {  
+write_to_testcase(afl_state_t *afl, void **mem, u32 len, u32 fix) { 
     //xzw TODO:这里应该要用算法来抓取合适的包并且组成一个种子，抓取的包应该由强化学习exp3来决定
     //
   u8 sent = 0;
+  extern u8 have_write_to_num_file;
+  extern u8 need_send_pre_packet;
+
+
+
 
   if (unlikely(afl->custom_mutators_count)) {
 
@@ -175,6 +204,14 @@ write_to_testcase(afl_state_t *afl, void **mem, u32 len, u32 fix) {
 
     if (likely(!sent)) {
 
+      //xzw:在每次更新.cur_input时也要更新.num_cur_input
+      //xzw:除了已经write_to_num_file_by_len时
+      if (!have_write_to_num_file) {
+        write_to_num_file(afl, afl->queue_cur);
+      } else {
+        have_write_to_num_file = 0;
+      }
+       
       /* everything as planned. use the potentially new data. */
       afl_fsrv_write_to_testcase(&afl->fsrv, *mem, new_size);
 
@@ -220,7 +257,14 @@ write_to_testcase(afl_state_t *afl, void **mem, u32 len, u32 fix) {
     }
 
     if (likely(!sent)) {
+      // xzw:在每次更新.cur_input时也要更新.num_cur_input
+      // xzw:变异后包的长度可能发送改变，此时已经write_to_numfile_by_len就不用write_to_num_file了
 
+      if (!have_write_to_num_file) {
+        write_to_num_file(afl, afl->queue_cur);
+      } else {
+        have_write_to_num_file = 0;
+      }
       /* boring uncustom. */
       afl_fsrv_write_to_testcase(&afl->fsrv, *mem, len);
 
@@ -247,7 +291,7 @@ write_to_testcase(afl_state_t *afl, void **mem, u32 len, u32 fix) {
 #endif
   // zyp
   // 要写入的8字节整数
-  static int64_t value = 0;
+  /* static int64_t value = 0;
 
   // 打开文件
   FILE *file = fopen(num_filename, "wb");
@@ -265,7 +309,7 @@ write_to_testcase(afl_state_t *afl, void **mem, u32 len, u32 fix) {
   }
 
   // 关闭文件
-  fclose(file);
+  fclose(file);*/
   return len;
 
 }
@@ -491,7 +535,10 @@ u8 calibrate_case(afl_state_t *afl, struct queue_entry *q, u8 *use_mem,
 
     (void)write_to_testcase(afl, (void **)&use_mem, q->len, 1);
 
+
+
     fault = fuzz_run_target(afl, &afl->fsrv, use_tmout);
+   
 
     /* afl->stop_soon is set by the handler for Ctrl+C. When it's pressed,
        we want to bail out quickly. */
@@ -532,9 +579,13 @@ u8 calibrate_case(afl_state_t *afl, struct queue_entry *q, u8 *use_mem,
 
     u64 cksum;
 
+
     (void)write_to_testcase(afl, (void **)&use_mem, q->len, 1);
+    // xzw
 
     fault = fuzz_run_target(afl, &afl->fsrv, use_tmout);
+
+
 
     /* afl->stop_soon is set by the handler for Ctrl+C. When it's pressed,
        we want to bail out quickly. */
@@ -906,7 +957,7 @@ void sync_fuzzers(afl_state_t *afl) {
    file size, to keep the stage short and sweet. */
 
 u8 trim_case(afl_state_t *afl, struct queue_entry *q, u8 *in_buf) {
-
+    //xzw:q即为当前队列
   u32 orig_len = q->len;
 
   /* Custom mutator trimmer */
@@ -1066,7 +1117,7 @@ u8 trim_case(afl_state_t *afl, struct queue_entry *q, u8 *in_buf) {
 
     close(fd);
 
-    queue_testcase_retake_mem(afl, q, in_buf, q->len, orig_len);
+    queue_testcase_retake_mem(afl, q, in_buf, q->len, orig_len);  
 
     memcpy(afl->fsrv.trace_bits, afl->clean_trace, afl->fsrv.map_size);
     update_bitmap_score(afl, q);
@@ -1084,19 +1135,30 @@ abort_trimming:
    error conditions, returning 1 if it's time to bail out. This is
    a helper function for fuzz_one(). */
 //xzw:common_fuzz_stuff会去检验变异出的包的合法性，如果有一堆的timeout就会导致变异出的seed被丢弃
-//xzw:如果按我们的逻辑是否应该把变异的包剔除？
+//xzw:这里无法识别pre rep non包，所以需要采用算法，common_fuzz_stuff里面包的长度也被改变了，对于变异之后来讲。
+//xzw:但是我们是基于一个包变异的，可以认为仅仅是这个包的长度改变了，(暂时)没有对其类型改变
+u8 have_write_to_num_file = 0;
 u8 __attribute__((hot))
 common_fuzz_stuff(afl_state_t *afl, u8 *out_buf, u32 len) {
 
   u8 fault;
+  extern u8 packet_fuzz;
+  //xzw
+  if (packet_fuzz) { 
+      write_to_num_file_by_len(afl,len); 
+      have_write_to_num_file = 1;
+  }
 
-  if (unlikely(len = write_to_testcase(afl, (void **)&out_buf, len, 0)) == 0) {
+  if (unlikely(len = write_to_testcase(afl, (void **)&out_buf, len, 0)) == 0) {  //xzw:todo
 
     return 0;
 
   }
+  // xzw
+
 
   fault = fuzz_run_target(afl, &afl->fsrv, afl->fsrv.exec_tmout);
+
 
   if (afl->stop_soon) { return 1; }
 
@@ -1127,8 +1189,11 @@ common_fuzz_stuff(afl_state_t *afl, u8 *out_buf, u32 len) {
   }
 
   /* This handles FAULT_ERROR for us: */
+  //xzw:TODO
 
-  afl->queued_discovered += save_if_interesting(afl, out_buf, len, fault);
+
+
+  afl->queued_discovered += save_if_interesting(afl, out_buf, len, fault);  
 
   if (!(afl->stage_cur % afl->stats_update_freq) ||
       afl->stage_cur + 1 == afl->stage_max) {

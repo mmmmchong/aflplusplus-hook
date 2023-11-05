@@ -421,8 +421,68 @@ u8 fuzz_one_original(afl_state_t *afl) {
 
   }
   //xzw:通过queue_testcase_get来获取in_buf
-  orig_in = in_buf = queue_testcase_get(afl, afl->queue_cur);  //get testcase
+  //这里插入exp3来获取包
+  //xzw
+  extern u8 packet_fuzz;
+  extern u8 pre_cnt;
+  extern u8 rep_cnt;
+  extern u8 non_cnt;
+
+  //extern struct cur_seed cur_seed;
+  
+  
+  //xzw:可以在这里使用现在的包的id来exp3出需要变异的包
+  /* if (packet_fuzz) { 
+      u8 arms = 0;
+      struct queue_entry * q = afl->queue_cur;
+      struct exp3_state *cur_state = (struct exp3_state *)ck_alloc(sizeof(struct exp3_state));
+       
+      arms = q->pre_num + q->rep_num + q->non_num;
+
+      
+      if (arms == 0) { PFATAL("In exp3 arms can't be 0\n"); }
+
+      cur_state->nbArms = arms;
+      cur_state->id = (u8 *)ck_alloc(sizeof(u8) * (cur_state->nbArms));
+      
+      for (int i = 0; i < q->pre_num; i++) {
+      cur_state->id[i] = q->pre_id[i];
+      }
+      for (int i = 0; i < q->rep_num; i++) {
+      cur_state->id[i+q->pre_num] = q->rep_id[i];
+      }
+      for (int i = 0; i < q->non_num; i++) {
+      cur_state->id[i+q->pre_num+q->rep_num] = q->non_id[i];
+      }
+
+      EXP3_init(cur_state, cur_state->nbArms, afl->garmma);
+
+      u8 choice=EXP3_choice(afl, cur_state);
+
+      printf("\n\nchosen packet id:%d\n\n", cur_state->id[choice]);
+
+      if (choice <= q->pre_num) { 
+          len = find_len_by_id(cur_state->id[choice], pre_cnt, 0);
+      orig_in = in_buf =
+          get_packet_by_id(cur_state->id[choice], pre_cnt, 0);
+      }
+      else if (choice <= q->pre_num+q->rep_num) {
+          len = find_len_by_id(cur_state->id[choice], rep_cnt, 1);
+      orig_in = in_buf =
+          get_packet_by_id(cur_state->id[choice], rep_cnt, 1);
+      } else {
+          len=  find_len_by_id(cur_state->id[choice], non_cnt, 2);
+      orig_in = in_buf =
+          get_packet_by_id(cur_state->id[choice], non_cnt, 2);
+      }
+    
+ //xzw:这里把len,orig_in,in_buf都填充为了我们抓出来的包
+
+  }  */
+
+  orig_in = in_buf =  queue_testcase_get(afl, afl->queue_cur);  // get testcase
   len = afl->queue_cur->len;
+
 
   out_buf = afl_realloc(AFL_BUF_PARAM(out), len);
   if (unlikely(!out_buf)) { PFATAL("alloc"); }
@@ -442,7 +502,7 @@ u8 fuzz_one_original(afl_state_t *afl) {
     if (afl->queue_cur->cal_failed < CAL_CHANCES) { //xzw:may be useful
 
       afl->queue_cur->exec_cksum = 0;
-      //xzw:种子来源是in_buf
+      
       res =
           calibrate_case(afl, afl->queue_cur, in_buf, afl->queue_cycle - 1, 0);  
 
@@ -466,6 +526,8 @@ u8 fuzz_one_original(afl_state_t *afl) {
   /************
    * TRIMMING *
    ************/
+  afl->disable_trim = 1;  //xzw:disable trim
+
 
   if (unlikely(!afl->non_instrumented_mode && !afl->queue_cur->trim_done &&
                !afl->disable_trim)) {
@@ -597,7 +659,7 @@ u8 fuzz_one_original(afl_state_t *afl) {
   orig_hit_cnt = afl->queued_items + afl->saved_crashes;
 
   /* Get a clean cksum. */
-
+  
   if (common_fuzz_stuff(afl, out_buf, len)) { goto abandon_entry; }
 
   prev_cksum = hash64(afl->fsrv.trace_bits, afl->fsrv.map_size, HASH_CONST);
@@ -3585,7 +3647,7 @@ static u8 mopt_common_fuzzing(afl_state_t *afl, MOpt_globals_t MOpt_globals) {
 
     u32 old_len = afl->queue_cur->len;
 
-    u8 res = trim_case(afl, afl->queue_cur, in_buf);
+    u8 res = trim_case(afl, afl->queue_cur, in_buf);  //xzw:O.o
     orig_in = in_buf = queue_testcase_get(afl, afl->queue_cur);
 
     if (unlikely(res == FSRV_RUN_ERROR)) {

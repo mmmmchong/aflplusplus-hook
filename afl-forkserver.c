@@ -322,6 +322,8 @@ restart_select:
     }
 
     len_read = read(fd, (u8 *)buf, 4);
+    //xzw:
+    printf("read from hook success\n");
 
     if (likely(len_read == 4)) {  // for speed we put this first
 
@@ -831,7 +833,7 @@ void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
   }
 
   if (pipe(st_pipe) || pipe(ctl_pipe)) { PFATAL("pipe() failed"); }
-
+  if (pipe(recv_pipe) || pipe(send_pipe)) { PFATAL("pipe() failed"); }
   fsrv->last_run_timed_out = 0;
   fsrv->fsrv_pid = fork();
 
@@ -1546,6 +1548,7 @@ afl_fsrv_write_to_testcase(afl_forkserver_t *fsrv, u8 *buf, size_t len) {
 
     s32 fd = fsrv->out_fd;
 
+
     if (!fsrv->use_stdin && fsrv->out_file) {
 
       if (unlikely(fsrv->no_unlink)) {
@@ -1576,8 +1579,9 @@ afl_fsrv_write_to_testcase(afl_forkserver_t *fsrv, u8 *buf, size_t len) {
       lseek(fd, 0, SEEK_SET);
 
     }
-
+    //printf("mem:%x,%x,%x,%x \n", buf[10], buf[11], buf[12]);
     // fprintf(stderr, "WRITE %d %u\n", fd, len);
+    //printf("\nfd:%d\n", fd);
     ck_write(fd, buf, len, fsrv->out_file);    //xzw:这里是真正写入的地方，到时候要modified的地方
                                                //fd实际上就是.cut_input，关注buf的来源
     if (fsrv->use_stdin) {
@@ -1615,6 +1619,7 @@ u32 wait_after_send_one_usecs =
     10;  // 发送完一个种子中一块内容后的等待时间in us
 u32 wait_after_sendusecs = 1;  // 发送完一个种子所有内容后的等待时间in us
 u32 new_start_server_waitusecs = 1000000;  // 重启服务器后的等待时间 in us
+
 
 int net_send(int sockfd, struct timeval timeout, char *mem, unsigned int len) {
   unsigned int  byte_count = 0;
@@ -1829,17 +1834,19 @@ u8 exist_pid(int pid) {
 
 /* Execute target application, monitoring for timeouts. Return status
    information. The called program will update afl->fsrv->trace_bits. */
-
+//xzw; 如果需要重新连接即send_tcp_hook，我们需要重新发送pre包
+u8 need_send_pre_packet = 0;
 fsrv_run_result_t __attribute__((hot))
 afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
                     volatile u8 *stop_soon_p) {
 
   s32 res;
-  u32 exec_ms;
+  static u32 exec_ms;  //xzw:modified
   u32 write_value = fsrv->last_run_timed_out;
 
 #ifdef __linux__
   if (fsrv->nyx_mode) {
+
 
     static uint32_t last_timeout_value = 0;
 
@@ -1915,7 +1922,7 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
   /* we have the fork server (or faux server) up and running
   First, tell it if the previous run timed out. */
   u8 need_new_prog = 0;
-  u8 is_new_start = 0;
+  extern u8 is_new_start ;
   if (use_net) {  // zyp
     if (!need_new_prog) {
       if (!exist_pid(fsrv->child_pid)) { need_new_prog = 1; }
@@ -1935,7 +1942,7 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
       RPFATAL(res, "Unable to request new process from fork server (OOM?)");
     }
 
-    is_new_start = 1;
+    //is_new_start = 1;
   }
 
 #ifdef AFL_PERSISTENT_RECORD
@@ -1971,6 +1978,8 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
     FATAL("Fork server is misbehaving (OOM?)");
 
   }
+  extern u8 pre_cnt;
+  extern struct queue_entry *pre_q; 
   // zyp
   if (is_new_start) {
     usleep(new_start_server_waitusecs);
@@ -1979,9 +1988,21 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
     } else {
       send_tcp_hook();
     }
+
     // add connection
     // send hook
   }
+  
+  //xzw
+  /* if (use_net && need_send_pre_packet && !is_new_start) {
+    if (net_protocol == 1) {
+      send_udp_hook();
+    } else {
+      send_tcp_hook();
+      
+    }
+  }*/
+  
 
   if (use_net) {
     struct timeval start;
@@ -2000,6 +2021,7 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
     // 改为处理完当前种子hook端再向fuzzer发消息，因此这里同样需要等待完成
     u32 dummyv = 0;
     exec_ms = read_s32_timed(recv_pipe[0], &dummyv, timeout, stop_soon_p);
+
     printf("afl-fuzz read from hook success, exec_ms=%d\n", exec_ms);
     if (exec_ms == 1001) {
       printf("\n");
@@ -2031,14 +2053,14 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
 
   // zyp
   // 如果timeout但是child进程没有crash，则重新发起一个新连接send hook即可
-  if (use_net && exec_ms > timeout) {
-    if (net_protocol == 1) {
-      send_udp_hook();
-    } else {
-      send_tcp_hook();
-    }
+  if (use_net && exec_ms > timeout && !is_new_start && !need_send_pre_packet) {
+    is_new_start = 0;
+    need_send_pre_packet = 1;
     return FSRV_RUN_TMOUT;
   }
+
+      is_new_start = 0;
+
 
   if (!use_net) {
     if (exec_ms > timeout) {

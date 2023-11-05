@@ -29,6 +29,11 @@
 #include <string.h>
 #include "cmplog.h"
 
+//xzw
+u8 packet_fuzz;
+u8 is_perform_dry_run;
+
+
 #ifdef HAVE_AFFINITY
 
 /* bind process to a specific cpu. Returns 0 on failure. */
@@ -652,8 +657,13 @@ void read_foreign_testcases(afl_state_t *afl, int first) {
 }
 /* Read all testcases from the input directory, then queue them for testing.
    Called at startup. */
-
-void read_testcases(afl_state_t *afl, u8 *directory) {
+//xzw
+u8   seed_cnt=0;
+u32  pre_cnt = 0;
+u32  rep_cnt = 0;
+u32  non_cnt = 0;
+struct queue_entry *testcase_q;
+void   read_testcases(afl_state_t *afl, u8 *directory) {
 
   struct dirent **nl;
   s32             nl_cnt, subdirs = 1;
@@ -662,19 +672,16 @@ void read_testcases(afl_state_t *afl, u8 *directory) {
   u8              val_buf[2][STRINGIFY_VAL_SIZE_MAX];
   //xzw
   u8 need_to_add=0;
-  u8 packet_fuzz=1;
-  u32       pre_cnt = 0;
-  u32       rep_cnt = 0;
-  u32       non_cnt = 0;
-  static u8 seed_cnt = 0; 
+
   if (packet_fuzz) {
     // xzw
-
-    for (int round = 0; round < MAX_PACKET; round++) {
-      pre_q[round] = (struct packet_queue *)malloc(sizeof(struct packet_queue));
-      rep_q[round] = (struct packet_queue *)malloc(sizeof(struct packet_queue));
-      non_q[round] = (struct packet_queue *)malloc(sizeof(struct packet_queue));
+   
+     for (int round = 0; round < MAX_PACKET; round++) {
+      pre_q[round] = (struct queue_entry *)calloc(1,sizeof(struct queue_entry));
+      rep_q[round] = (struct queue_entry *)calloc(1,sizeof(struct queue_entry));
+      non_q[round] = (struct queue_entry *)calloc(1,sizeof(struct queue_entry));
     }
+   
   }
 
   /* Auto-detect non-in-place resumption attempts. */
@@ -805,32 +812,124 @@ void read_testcases(afl_state_t *afl, u8 *directory) {
 
 
       // xzw
-      if (packet_fuzz) {
+      if (packet_fuzz) {   //xzw:在这里读取每一个包，并且把他们添加到对应的队列
+        u8 *fname = ck_strdup(nl[i]->d_name);
+        
         if (strlen(nl[i]->d_name) < 3) {
+          ck_free(fname);
           PFATAL("Wrong filename formate, in packet_fuzz you need to add ",
                  "prefix to tell fuzz the type of packet\n");
         }
-        if (nl[i]->d_name[0] == 'p' && nl[i]->d_name[1] == 'r' &&
-            nl[i]->d_name[2] == 'e') {
-          pre_q[pre_cnt]->fname = alloc_printf(dir,ck_strdup(nl[i]->d_name));
+        u8 check_chars[4];  //xzw:用来检查前三个字节来判断包的类型
+        strncpy(check_chars, fname, 3);
+        check_chars[3] = '\0';  
+
+         int comparison_result_pre = strcmp(check_chars, "pre");
+         int comparison_result_rep = strcmp(check_chars, "rep");
+         int comparison_result_non = strcmp(check_chars, "non");
+
+        testcase_q =(struct queue_entry *)ck_alloc(sizeof(struct queue_entry));
+        testcase_q->fname = alloc_printf("%s/%s", dir, fname);
+        testcase_q->len = st.st_size >= MAX_FILE ? MAX_FILE : st.st_size;
+        //extern u8 *num_filename;
+        u8        *numfile_buf;
+
+        if (comparison_result_pre == 0) {  //如果是前缀包
+
+          testcase_q->pre_num = 1;
+          testcase_q->pre_id = (u8 *)ck_alloc(sizeof(u8) * testcase_q->pre_num);
+          testcase_q->pre_id[0] = pre_cnt;
+
           pre_q[pre_cnt]->len = st.st_size >= MAX_FILE ? MAX_FILE : st.st_size;
+          pre_q[pre_cnt]->pre_num = 1;
+          pre_q[pre_cnt]->pre_id =
+              (u8 *)ck_alloc(sizeof(u8) * testcase_q->pre_num);
+          pre_q[pre_cnt]->pre_id[0] = pre_cnt;
+          pre_q[pre_cnt]->fname = ck_strdup(testcase_q->fname);
           pre_q[pre_cnt]->id = pre_cnt;
-          pre_cnt++;
+
+
+            add_to_queue(afl, testcase_q->fname, pre_q[pre_cnt]->len, passed_det);
+
+            pre_cnt++;
+
+        } else if (comparison_result_rep == 0) {
+
+            testcase_q->rep_num = 1;
+            testcase_q->rep_id = (u8 *)ck_alloc(sizeof(u8) * testcase_q->rep_num);
+            testcase_q->rep_id[0] =rep_cnt ;
+
+            rep_q[rep_cnt]->len = st.st_size >= MAX_FILE ? MAX_FILE : st.st_size;
+            rep_q[rep_cnt]->rep_num = 1;
+            rep_q[rep_cnt]->rep_id =(u8 *)ck_alloc(sizeof(u8) * testcase_q->rep_num);
+            rep_q[rep_cnt]->rep_id[0] = rep_cnt;
+            rep_q[rep_cnt]->fname = ck_strdup(testcase_q->fname);
+            rep_q[rep_cnt]->id = rep_cnt;
+
+            
+            add_to_queue(afl, testcase_q->fname, rep_q[rep_cnt]->len, passed_det);
+            
+
+            rep_cnt++;
+
+        } else if (comparison_result_non == 0) {
+
+            testcase_q->non_num = 1;
+            testcase_q->non_id =
+                (u8 *)ck_alloc(sizeof(u8) * testcase_q->non_num);
+            testcase_q->non_id[0] = non_cnt;
+
+            non_q[non_cnt]->len =
+                st.st_size >= MAX_FILE ? MAX_FILE : st.st_size;
+            non_q[non_cnt]->non_num = 1;
+            non_q[non_cnt]->non_id =
+                (u8 *)ck_alloc(sizeof(u8) * testcase_q->non_num);
+            non_q[non_cnt]->non_id[0] = non_cnt;
+            non_q[non_cnt]->fname = ck_strdup(testcase_q->fname);
+            non_q[non_cnt]->id = non_cnt;
+            
+            add_to_queue(afl, testcase_q->fname, non_q[non_cnt]->len, passed_det);
+            
+            
+            non_cnt++;
+
+        } else {
+            PFATAL(
+                "Unrecognized file name:%s,in packet_fuzz you need to provide "
+                "the correct prefix(pre, rep, non)",
+                fname);
+        }
+
+
+
+
+        /* if (check_chars == "pre") {
+            pre_cnt++;
+
+          pre_q[pre_cnt]->id = pre_cnt;
+          add_to_queue(afl, fname, pre_q[pre_cnt]->len, passed_det);
+          
         }
         if (nl[i]->d_name[0] == 'r' && nl[i]->d_name[1] == 'e' &&
             nl[i]->d_name[2] == 'p') {
-          rep_q[rep_cnt]->fname = alloc_printf(dir, ck_strdup(nl[i]->d_name));
+          rep_q[rep_cnt]->fname = alloc_printf("%s/%s", dir,fname);
           rep_q[rep_cnt]->len = st.st_size >= MAX_FILE ? MAX_FILE : st.st_size;
           rep_q[rep_cnt]->id = rep_cnt;
+          add_to_queue(afl, fname, rep_q[pre_cnt]->len, passed_det);
           rep_cnt++;
+          
         }
         if (nl[i]->d_name[0] == 'n' && nl[i]->d_name[1] == 'o' &&
             nl[i]->d_name[2] == 'n') {
-          non_q[non_cnt]->fname = alloc_printf(dir, ck_strdup(nl[i]->d_name));
+          non_q[non_cnt]->fname = alloc_printf("%s/%s", dir, fname);
           non_q[non_cnt]->len = st.st_size >= MAX_FILE ? MAX_FILE : st.st_size;
           non_q[non_cnt]->id = non_cnt;
+          add_to_queue(afl, fname, non_q[pre_cnt]->len, passed_det);
           non_cnt++;
-        }
+        }*/
+        ck_free(fname);
+        
+        ck_free(testcase_q);
         goto next_entry;
       }
 
@@ -843,29 +942,64 @@ void read_testcases(afl_state_t *afl, u8 *directory) {
       if (!access(dfn, F_OK)) { passed_det = 1; }
 
       //xzw
-      if (packet_fuzz ) { 
-          for (int rep = 1; rep <= rep_cnt; rep++) {
-          seed_cnt += rep * pre_cnt * non_cnt; 
-         }
-          for (int pre = 0; pre < pre_cnt; pre++) {
+      if (packet_fuzz ) {  //xzw:生成calibrate的种子
+
+          struct exp3_state *pre_state =
+            (struct exp3_state *)ck_alloc(sizeof(struct exp3_state));
+        struct exp3_state *rep_state =
+            (struct exp3_state *)ck_alloc(sizeof(struct exp3_state));
+        struct exp3_state *non_state =
+            (struct exp3_state *)ck_alloc(sizeof(struct exp3_state));
+        struct exp3_state *cur_state =
+            (struct exp3_state *)ck_alloc(sizeof(struct exp3_state));
+
+
+
+        pre_state->nbArms = pre_cnt;
+        rep_state->nbArms = rep_cnt;
+        non_state->nbArms = non_cnt;
+
+        pre_state->id = (u8 *)ck_alloc(sizeof(u8) * pre_cnt);
+        rep_state->id = (u8 *)ck_alloc(sizeof(u8) * rep_cnt);
+        non_state->id = (u8 *)ck_alloc(sizeof(u8) * non_cnt);
+
+        for (int i = 0; i < pre_cnt; i++) {
+          pre_state->id[i] = pre_q[i]->id;
+        }
+        for (int i = 0; i < rep_cnt; i++) {
+          rep_state->id[i] = rep_q[i]->id;
+        }
+        for (int i = 0; i < non_cnt; i++) {
+          non_state->id[i] = non_q[i]->id;
+        }
+
+        EXP3_init(pre_state, pre_state->nbArms, afl->garmma);
+        EXP3_init(rep_state, rep_state->nbArms, afl->garmma);
+        EXP3_init(non_state, non_state->nbArms, afl->garmma);
+
+           /* for (int pre = 0; pre < pre_cnt; pre++) {
 
             for(int rep = 0;rep < rep_cnt; rep++){
 
                 for (int non=0;non<non_cnt;non++){
-              
+
+                seed_cnt++;
+
                 FILE *pre_file = fopen(pre_q[pre]->fname, "r");
                 FILE *rep_file = fopen(rep_q[pre]->fname, "r");
                 FILE *non_file = fopen(non_q[pre]->fname, "r");
+                 extern u8 *num_filename;
+                num_filename = alloc_printf("%s/.num_cur_input_%d_%d_%d",afl->out_dir);
                 
-
                 u8 *filename = alloc_printf("%s/modified_seed_%d_%d_%d",dir,pre,rep,non );
                 
                 FILE *modified_file = fopen(filename, "w");
 
                 if (modified_file == NULL) {
+                  ck_free(filename);
                   PFATAL("Can't create file:%s", filename);
                 }
-
+                
                 u32 packet_length =pre_q[pre]->len + rep_q[rep]->len + non_q[non]->len;
                 
                 int c;
@@ -881,20 +1015,33 @@ void read_testcases(afl_state_t *afl, u8 *directory) {
                 while ((c = fgetc(non_file)) != EOF) {
                   fputc(c, modified_file);
                 }
-
+                //u8 *numfile_buf = alloc_printf("p 1 %d r 1 %d n 1 %d",pre_q[pre]->len, rep_q[rep]->len, non_q[non]->len); //写下包的个数和长度
                 fclose(pre_file);
                 fclose(rep_file);
                 fclose(non_file);
                 fclose(modified_file);
-
-                add_to_queue(afl, filename, packet_length >= MAX_FILE ? MAX_FILE : packet_length, passed_det);
+                
+                int fd = open(num_filename, O_WRONLY | O_CREAT | O_APPEND);
+                ck_write(fd, numfile_buf, strlen(numfile_buf), num_filename);
+                ck_free(numfile_buf);
+                add_to_queue(afl, filename, packet_length >= MAX_FILE ? MAX_FILE : packet_length, passed_det);  //xzw:两个种子调两次add_to_queue
+                //ck_free(filename);
                 }
             }
-          }
-          /* for (int packet = 0; packet < seed_cnt; packet++) {
-          u8 *filename = alloc_printf("modified_seed_%d", seed_cnt);
-          add_to_queue(afl, filename, (pre_q[0]->len + rep_q[0]->len + non_q[0]->len),passed_det);
           }*/
+
+          /* for (int pre = 0; pre < pre_cnt; pre++) {
+            EXP3_init(&pre_q[pre], pre_cnt, afl->garmma);
+          }
+
+         for (int rep = 0; rep < rep_cnt; rep++) {
+            EXP3_init(&rep_q[rep], rep_cnt, afl->garmma);
+         }
+
+         for (int non = 0; non < non_cnt; non++) {
+            EXP3_init(&non_q[non], non_cnt, afl->garmma);
+         }*/
+
       } else {
       add_to_queue(afl, fn2, st.st_size >= MAX_FILE ? MAX_FILE : st.st_size,
                    passed_det);
@@ -983,16 +1130,304 @@ void read_testcases(afl_state_t *afl, u8 *directory) {
   afl->queued_at_start = afl->queued_items;
 
 }
+//xzw
+// 
+//  Choose randomly accordingly to the trusts
+//  https://github.com/SMPyBandits/SMPyBandits/blob/master/SMPyBandits/Policies/Exp3.py#L111
+s32 EXP3_choice(afl_state_t *afl, struct exp3_state *s) {
+  if (s->t < s->nbArms) {
+    return s->t;
+  } else {
+    EXP3_trusts(afl, s);
+    return EXP3_weighted_random(afl, s->trusts, s->nbArms);
+  }
+}
+
+static s32 EXP3_weighted_random(afl_state_t *afl, double *trusts, s32 nbArms) {
+  double sum, rnd;
+  int    i;
+
+  sum = EXP3_sum(trusts, nbArms);
+  rnd = (double)rand_below(afl, RAND_MAX) / (double)RAND_MAX * sum;
+  for (i = 0; i < nbArms; i++) {
+    if (rnd < trusts[i]) return i;
+
+    rnd -= trusts[i];
+  }
+
+  PFATAL("EXP3_weighted_random");
+}
+
+static double EXP3_sum(double *arr, s32 n) {
+  double sum;
+  int    i;
+
+  sum = 0.f;
+  for (i = 0; i < n; i++) {
+    sum += arr[i];
+  }
+
+  return sum;
+}
+
+// Update trusts
+// https://github.com/SMPyBandits/SMPyBandits/blob/master/SMPyBandits/Policies/Exp3.py#L67
+static void EXP3_trusts(__attribute__((unused)) afl_state_t *afl,
+                        struct exp3_state                   *s) {
+  double sum;
+  u32    i;
+
+  for (i = 0; i < s->nbArms; i++) {
+    s->trusts[i] = ((1.f - s->gamma) * s->weights[i]) + (s->gamma / s->nbArms);
+
+    if (isinf(s->trusts[i])) s->trusts[i] = 0;
+  }
+
+  sum = EXP3_sum(s->trusts, s->nbArms);
+
+  if (sum <= 1e-8) {
+    for (u32 i = 0; i < s->nbArms; i++) {
+      s->trusts[i] = 1.f / s->nbArms;
+    }
+
+    sum = EXP3_sum(s->trusts, s->nbArms);
+  }
+  PFATAL("sum can't be 0\n");
+
+  for (i = 0; i < s->nbArms; i++) {
+    s->trusts[i] /= sum;
+  }
+}
+
+void EXP3_init(struct exp3_state *s, int arms, double gamma) {
+  u32 i;
+
+  s->t = 0;
+  s->nbArms = arms;
+  s->gamma = gamma;
+
+  for (i = 0; i < s->nbArms; i++) {
+  s->weights[i] = 1.f / s->nbArms;
+  s->rewards[i] = 0;
+  s->trusts[i] = 1.f / s->nbArms;
+  }
+}
+
+//xzw
+void copy_queue_entry_fields(struct queue_entry *dest,
+                             struct queue_entry *src) {
+  dest->pre_num = src->pre_num;
+  dest->rep_num = src->rep_num;
+  dest->non_num = src->non_num;
+  dest->len = src->len;
+  dest->id = src->id;
+
+  dest->pre_id =
+      (u8 *)ck_alloc(src->pre_num);  
+  memcpy(dest->pre_id, src->pre_id, src->pre_num);
+
+  dest->rep_id = (u8 *)ck_alloc(src->rep_num);
+  memcpy(dest->rep_id, src->rep_id, src->rep_num);
+
+  dest->non_id = (u8 *)ck_alloc(src->non_num);
+  memcpy(dest->non_id, src->non_id, src->non_num);
+
+  dest->fname = ck_strdup(src->fname);  
+}
+
+u32 find_len_by_id(u32 id, u32 queue_size, int queue_type) {
+  struct packet_queue **selected_queue;
+  int                   i = 0;
+  //xzw:
+  //0代表pre
+  //1代表rep
+  //2代表non
+  switch (queue_type) {
+    case PRE_PACKET:
+      selected_queue = pre_q;
+      break;
+    case REP_PACKET:
+      selected_queue = rep_q;
+      break;
+    case NON_PACKET:
+      selected_queue = non_q;
+      break;
+    default:
+      return 0;
+  }
+
+  for ( i = 0; i < queue_size; ++i) {
+    if (selected_queue[i] != NULL && selected_queue[i]->id == id) {
+      selected_queue[i]->used = 1;
+      return selected_queue[i]->len;
+    }
+  }
+}
+
+//xzw
+void get_id_by_filename(struct queue_entry *q) {
+    //xzw
+  u8 *result = strstr(q->fname, "modified_seed_");
+  u8  id;
+  if (result == NULL) { 
+      PFATAL("modified seed not found.\n"); 
+  }
+
+  result += strlen("modified_seed_");
+
+  if (q->pre_num > 0) {
+    q->pre_id = (u8 *)ck_alloc(sizeof(u8) * (q->pre_num));
+    for (int i = 0; i < q->pre_num; i++) {
+      sscanf(result, "%d", &id);
+      q->pre_id[i] = id;
+      result = strchr(result + 1, '_');
+      result++;
+    }
+  }
+  if (q->rep_num > 0) {
+    q->rep_id = (u8 *)ck_alloc(sizeof(u8) * (q->rep_num));
+    for (int i = 0; i < q->rep_num; i++) {
+      sscanf(result, "%d", &id);
+      q->rep_id[i] = id;
+      result = strchr(result + 1, '_');
+      result++;
+    }
+  }
+  if (q->non_num > 0) {
+    q->non_id = (u8 *)ck_alloc(sizeof(u8) * (q->non_num));
+    for (int i = 0; i < q->non_num; i++) {
+      sscanf(result, "%d", &id);
+      q->non_id[i] = id;
+      result = strchr(result + 1, '_');
+      result++;
+    }
+  }
+}
+
+//xzw
+extern int send_pipe[2];
+extern int recv_pipe[2];
+void send_pre_packet(afl_state_t *afl) {
+    //xzw:实际上就是写一个pre[0]包
+    //xzw:在fsrv已经启动的情况下,确保之前的fd已经断开or不存在可以做的是：
+    //xzw:send_tcp_hook,send_to_hook,read_from_hook这样就模拟了一次发送
+  u8 *mem = get_packet_by_id(0, pre_cnt, 0);
+  afl_fsrv_write_to_testcase(&afl->fsrv, *mem, pre_q[0]->len);
+  write_to_num_file(afl, pre_q[0]);
+  printf("sned_pre_packet\n");
+  send_tcp_hook();
+  ck_free(mem);
+  int  check_send, check_recv;
+  char buf[4];
+
+  if ((check_send = write(send_pipe[1], "HALO", 4)) < 0) {
+    WARNF("Unable to write ");
+  }
+
+}  
+// xzw
+  void write_to_num_file_by_len(afl_state_t *afl,u32 len) {
+  u8 *num_filename;
+  u8 *num_file_buf;
+  u32 max_file_size = 4096;
+
+  num_filename = alloc_printf("%s/.num_cur_input", afl->out_dir);
+  num_file_buf = ck_alloc(max_file_size);
+
+   int fd = open(num_filename, O_RDWR | O_TRUNC | O_CREAT, DEFAULT_PERMISSION);
+
+  if (fd < 0) {
+    ck_free(num_filename);
+    ck_free(num_file_buf);
+    PFATAL("Open num_file failed");
+  }
+  strcat((char *)num_file_buf, "p ");
+  snprintf((char *)num_file_buf + strlen((char *)num_file_buf),
+           max_file_size - strlen((char *)num_file_buf), "%d ", len);
+  ck_write(fd, num_file_buf, strlen(num_file_buf),num_filename);
+  ck_free(num_filename);
+  ck_free(num_file_buf);
+  close(fd);
+  }
+
+
+void write_to_num_file(afl_state_t *afl, struct queue_entry *q) {
+  // xzw
+  u8 *num_filename;
+  u8        *num_file_buf;
+  u32        max_file_size = 4096;
+  u8         num;
+  u32        length;
+  printf("fuzz_write_to_num_file\n");
+  num_filename = alloc_printf("%s/.num_cur_input", afl->out_dir);
+  num_file_buf = ck_alloc(max_file_size);
+
+  int fd = open(num_filename, O_RDWR | O_TRUNC | O_CREAT, DEFAULT_PERMISSION);
+
+  if (fd < 0) { 
+      ck_free(num_filename);
+      ck_free(num_file_buf);
+      PFATAL("Open num_file failed");
+  }
+
+  if (q->pre_num > 0) {
+      strcat((char *)num_file_buf, "p ");
+
+      for (int i = 0; i < q->pre_num; i++) {
+
+      //cur_p.cur_pre_id[i] = num;
+
+      length = pre_q[q->pre_id[i]]->len;
+      snprintf((char *)num_file_buf + strlen((char *)num_file_buf),
+               max_file_size - strlen((char *)num_file_buf), "%d ", length);
+
+      }
+
+  }
+
+    if (q->rep_num > 0) {
+      strcat((char *)num_file_buf, "r ");
+
+      for (int i = 0; i < q->rep_num; i++) {
+
+      //cur_p.cur_pre_id[i] = num;
+
+      length = rep_q[q->rep_id[i]]->len;
+      snprintf((char *)num_file_buf + strlen((char *)num_file_buf),
+               max_file_size - strlen((char *)num_file_buf), "%d ", length);
+
+      }
+  }
+    if (q->non_num > 0) {
+      strcat((char *)num_file_buf, "n ");
+      for (int i = 0; i < q->rep_num; i++) {
+      //cur_p.cur_non_id[i] = num;
+
+      length = non_q[q->non_id[i]]->len;
+      snprintf((char *)num_file_buf + strlen((char *)num_file_buf),
+               max_file_size - strlen((char *)num_file_buf), "%d ", length);
+      }
+    }
+        printf("num_file_buf:%s\n",num_file_buf);
+
+        ck_write(fd,num_file_buf,strlen(num_file_buf),num_filename);
+
+        close(fd);
+        
+        ck_free(num_filename);
+
+        ck_free(num_file_buf);
+    }//xzw:TODO写完向num_file填充的函数，需要注意的是，格式为p %d %d %d r.....
 
 /* Perform dry run of all test cases to confirm that the app is working as
    expected. This is done only for the initial inputs, and only once. */
 
-void perform_dry_run(afl_state_t *afl) {
+void perform_dry_run(afl_state_t *afl) {  //xzw:在我们这样的packet_fuzz中。perform_dry_run的作用可以单一的理解为验证我们包的准确性。
 
   struct queue_entry *q;
   u32                 cal_failures = 0, idx;
   u8                 *use_mem;
-
+  
   for (idx = 0; idx < afl->queued_items; idx++) {
 
     q = afl->queue_buf[idx];
@@ -1000,6 +1435,11 @@ void perform_dry_run(afl_state_t *afl) {
 
     u8  res;
     s32 fd;
+
+    //xzw
+    write_to_num_file(afl, q);
+
+
 
     if (unlikely(!q->len)) {
 
@@ -1387,73 +1827,56 @@ void perform_dry_run(afl_state_t *afl) {
   /* Now we remove all entries from the queue that have a duplicate trace map */
 
   u32 duplicates = 0, i;
+    for (idx = 0; idx < afl->queued_items - 1; idx++) {
+      q = afl->queue_buf[idx];
+      if (!q || q->disabled || q->cal_failed || !q->exec_cksum) { continue; }
+      u32 done = 0;
 
-  for (idx = 0; idx < afl->queued_items - 1; idx++) {
+      for (i = idx + 1;
+           likely(i < afl->queued_items && afl->queue_buf[i] && !done); ++i) {
+        struct queue_entry *p = afl->queue_buf[i];
+        if (p->disabled || p->cal_failed || !p->exec_cksum) { continue; }
 
-    q = afl->queue_buf[idx];
-    if (!q || q->disabled || q->cal_failed || !q->exec_cksum) { continue; }
-    u32 done = 0;
+        if (p->exec_cksum == q->exec_cksum) {
+          duplicates = 1;
 
-    for (i = idx + 1;
-         likely(i < afl->queued_items && afl->queue_buf[i] && !done); ++i) {
+          // we keep the shorter file
+          if (p->len >= q->len) {
+            if (!p->was_fuzzed) {
+              p->was_fuzzed = 1;
+              --afl->pending_not_fuzzed;
+              --afl->active_items;
+            }
 
-      struct queue_entry *p = afl->queue_buf[i];
-      if (p->disabled || p->cal_failed || !p->exec_cksum) { continue; }
+            p->disabled = 1;
+            p->perf_score = 0;
 
-      if (p->exec_cksum == q->exec_cksum) {
+            if (afl->debug) {
+              WARNF("Same coverage - %s is kept active, %s is disabled.",
+                    q->fname, p->fname);
+            }
 
-        duplicates = 1;
+          } else {
+            if (!q->was_fuzzed) {
+              q->was_fuzzed = 1;
+              --afl->pending_not_fuzzed;
+              --afl->active_items;
+            }
 
-        // we keep the shorter file
-        if (p->len >= q->len) {
+            q->disabled = 1;
+            q->perf_score = 0;
 
-          if (!p->was_fuzzed) {
+            if (afl->debug) {
+              WARNF("Same coverage - %s is kept active, %s is disabled.",
+                    p->fname, q->fname);
+            }
 
-            p->was_fuzzed = 1;
-            --afl->pending_not_fuzzed;
-            --afl->active_items;
-
+            done =
+                1;  // end inner loop because outer loop entry is disabled now
           }
-
-          p->disabled = 1;
-          p->perf_score = 0;
-
-          if (afl->debug) {
-
-            WARNF("Same coverage - %s is kept active, %s is disabled.",
-                  q->fname, p->fname);
-
-          }
-
-        } else {
-
-          if (!q->was_fuzzed) {
-
-            q->was_fuzzed = 1;
-            --afl->pending_not_fuzzed;
-            --afl->active_items;
-
-          }
-
-          q->disabled = 1;
-          q->perf_score = 0;
-
-          if (afl->debug) {
-
-            WARNF("Same coverage - %s is kept active, %s is disabled.",
-                  p->fname, q->fname);
-
-          }
-
-          done = 1;  // end inner loop because outer loop entry is disabled now
-
         }
-
       }
-
     }
-
-  }
 
   if (duplicates) {
 
@@ -1798,7 +2221,7 @@ double get_runnable_processes(void) {
 
 /* Delete the temporary directory used for in-place session resume. */
 
-void nuke_resume_dir(afl_state_t *afl) {
+void nuke_resume_dir(afl_state_t *afl) {  //xzw:这里之后可能要加上对一些文件的删除
 
   u8 *fn;
 
@@ -3241,4 +3664,5 @@ void save_cmdline(afl_state_t *afl, u32 argc, char **argv) {
   *buf = 0;
 
 }
+
 

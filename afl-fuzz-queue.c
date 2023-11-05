@@ -586,16 +586,54 @@ static u8 check_if_text(afl_state_t *afl, struct queue_entry *q) {
 void add_to_queue(afl_state_t *afl, u8 *fname, u32 len, u8 passed_det) { //xzw:这里是进入队列，计算长度的
   struct queue_entry *q =
       (struct queue_entry *)ck_alloc(sizeof(struct queue_entry));
-  //xzw
-    u8 packet_fuzz=1;
 
+  //xzw
+  extern u8 packet_fuzz;
+  extern  u8 is_perform_dry_run;
+  extern u8      pre_cnt,rep_cnt,non_cnt;
+  extern struct queue_entry *testcase_q; 
+  extern struct queue_entry *new_q;
+  if (packet_fuzz && is_perform_dry_run) { 
+      if (testcase_q->pre_num > 0) {
+          q->pre_num=testcase_q->pre_num;
+          q->pre_id = (u8 *)ck_alloc(sizeof(u8) * (q->pre_num));
+          q->pre_id[0] = pre_cnt;
+      } else if (testcase_q->rep_num > 0) {
+          q->rep_num = testcase_q->rep_num;
+          q->rep_id = (u8 *)ck_alloc(sizeof(u8) * (q->rep_num)); //在rep队列中的id
+          q->rep_id[0] = rep_cnt;
+      } else {
+        q->non_num = testcase_q->non_num;
+        q->non_id = (u8 *)ck_alloc(sizeof(u8) * (q->non_num));
+        q->non_id[0] = non_cnt;
+      }
+  } else if (packet_fuzz) { //xzw:此时就是新发现的种子,应该要给对应的元素，并且加入对应队列
+      if (new_q->pre_num > 0) {
+        q->pre_num = new_q->pre_num;
+        q->pre_id = (u8 *)ck_alloc(sizeof(u8) * (q->pre_num));
+        q->pre_id[0] = pre_cnt;
+      } else if (new_q->rep_num > 0) {
+        q->rep_num = new_q->rep_num;
+        q->rep_id =
+            (u8 *)ck_alloc(sizeof(u8) * (q->rep_num));  // 在rep队列中的id
+        q->rep_id[0] = rep_cnt;
+      } else {
+        q->non_num = new_q->non_num;
+        q->non_id = (u8 *)ck_alloc(sizeof(u8) * (q->non_num));
+        q->non_id[0] = non_cnt;
+      }
+
+  }
     q->fname = fname;
     q->len = len;
     q->depth = afl->cur_depth + 1;
     q->passed_det = passed_det;
     q->trace_mini = NULL;
     q->testcase_buf = NULL;
-    q->mother = afl->queue_cur;
+    q->mother = afl->queue_cur;  
+    // xzw
+    //get_id_by_filename(q);
+
 #ifdef INTROSPECTION
   q->bitsmap_size = afl->bitsmap_size;
 #endif
@@ -670,7 +708,22 @@ void add_to_queue(afl_state_t *afl, u8 *fname, u32 len, u8 passed_det) { //xzw:�
 void destroy_queue(afl_state_t *afl) {
 
   u32 i;
+  extern u8 pre_cnt, rep_cnt, non_cnt;
+  //xzw  释放内存
+  for (int i = 0; i < pre_cnt;i++) {
+    ck_free(pre_q[i]->fname);
+  }
+  for (int i = 0; i < rep_cnt; i++) {
+    ck_free(rep_q[i]->fname);
+  }
+  for (int i = 0; i < non_cnt; i++) {
+    ck_free(non_q[i]->fname);
+  }
+  ck_free(pre_q);
+  ck_free(rep_q);
+  ck_free(non_q);
 
+  //xzw
   for (i = 0; i < afl->queued_items; i++) {
 
     struct queue_entry *q;
@@ -1223,8 +1276,54 @@ inline void queue_testcase_retake_mem(afl_state_t *afl, struct queue_entry *q,
   }
 
 }
+//xzw
+inline u8 *get_packet_by_id(u32 id, int queue_size, int queue_type) {
+  
+  struct queue_entry **selected_queue;
+  int                   i = 0;
+  // xzw:
+  // 0代表pre
+  // 1代表rep
+  // 2代表non
+  switch (queue_type) {
+    case PRE_PACKET:
+      selected_queue = pre_q;
+      break;
+    case REP_PACKET:
+      selected_queue = rep_q;
+      break;
+    case NON_PACKET:
+      selected_queue = non_q;
+      break;
+    default:
+      return 0;
+  }
 
-/* Returns the testcase buf from the file behind this queue entry.
+    u8 *filename;
+    u8 *buf;
+    
+    for (i = 0; i < queue_size; ++i) {
+         if (selected_queue[i] != NULL && selected_queue[i]->id == id) {
+      filename = alloc_printf("%s",selected_queue[i]->fname);
+      buf = (u8 *)ck_alloc(sizeof(u8) * selected_queue[i]->len);
+      break;
+        } 
+    }
+    if (i > queue_size) { PFATAL("Nonexistent id:%d", id);
+    }
+    int fd = open((char *)filename, O_RDONLY);
+
+    if (unlikely(fd < 0)) {
+        PFATAL("Unable to open '%s'", (char *)selected_queue[i]->fname);
+    }
+    ck_read(fd, buf, selected_queue[i]->len, filename);
+    ck_free(filename);
+    close(fd);
+    return buf;
+
+
+  }
+  /* Returns the testcase buf from the file behind this queue entry.
   Increases the refcount. */
 //xzw:通过q去维持一个queue来获取种子
 inline u8 *queue_testcase_get(afl_state_t *afl, struct queue_entry *q) {
@@ -1357,7 +1456,7 @@ inline u8 *queue_testcase_get(afl_state_t *afl, struct queue_entry *q) {
       PFATAL("Unable to malloc '%s' with len %u", (char *)q->fname, len);
 
     }
-
+    printf("cur_input len:%d buffer:%s\n", len, q->testcase_buf);
     ck_read(fd, q->testcase_buf, len, q->fname);
     close(fd);
 

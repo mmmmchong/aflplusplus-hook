@@ -428,57 +428,6 @@ u8 fuzz_one_original(afl_state_t *afl) {
   extern u8 rep_cnt;
   extern u8 non_cnt;
 
-  //extern struct cur_seed cur_seed;
-  
-  
-  //xzw:可以在这里使用现在的包的id来exp3出需要变异的包
-  /* if (packet_fuzz) { 
-      u8 arms = 0;
-      struct queue_entry * q = afl->queue_cur;
-      struct exp3_state *cur_state = (struct exp3_state *)ck_alloc(sizeof(struct exp3_state));
-       
-      arms = q->pre_num + q->rep_num + q->non_num;
-
-      
-      if (arms == 0) { PFATAL("In exp3 arms can't be 0\n"); }
-
-      cur_state->nbArms = arms;
-      cur_state->id = (u8 *)ck_alloc(sizeof(u8) * (cur_state->nbArms));
-      
-      for (int i = 0; i < q->pre_num; i++) {
-      cur_state->id[i] = q->pre_id[i];
-      }
-      for (int i = 0; i < q->rep_num; i++) {
-      cur_state->id[i+q->pre_num] = q->rep_id[i];
-      }
-      for (int i = 0; i < q->non_num; i++) {
-      cur_state->id[i+q->pre_num+q->rep_num] = q->non_id[i];
-      }
-
-      EXP3_init(cur_state, cur_state->nbArms, afl->garmma);
-
-      u8 choice=EXP3_choice(afl, cur_state);
-
-      printf("\n\nchosen packet id:%d\n\n", cur_state->id[choice]);
-
-      if (choice <= q->pre_num) { 
-          len = find_len_by_id(cur_state->id[choice], pre_cnt, 0);
-      orig_in = in_buf =
-          get_packet_by_id(cur_state->id[choice], pre_cnt, 0);
-      }
-      else if (choice <= q->pre_num+q->rep_num) {
-          len = find_len_by_id(cur_state->id[choice], rep_cnt, 1);
-      orig_in = in_buf =
-          get_packet_by_id(cur_state->id[choice], rep_cnt, 1);
-      } else {
-          len=  find_len_by_id(cur_state->id[choice], non_cnt, 2);
-      orig_in = in_buf =
-          get_packet_by_id(cur_state->id[choice], non_cnt, 2);
-      }
-    
- //xzw:这里把len,orig_in,in_buf都填充为了我们抓出来的包
-
-  }  */
 
   orig_in = in_buf =  queue_testcase_get(afl, afl->queue_cur);  // get testcase
   len = afl->queue_cur->len;
@@ -535,6 +484,7 @@ u8 fuzz_one_original(afl_state_t *afl) {
     u32 old_len = afl->queue_cur->len;
 
     u8 res = trim_case(afl, afl->queue_cur, in_buf);
+
     orig_in = in_buf = queue_testcase_get(afl, afl->queue_cur);
 
     if (unlikely(res == FSRV_RUN_ERROR)) {

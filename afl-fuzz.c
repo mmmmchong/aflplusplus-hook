@@ -2011,17 +2011,10 @@ int main(int argc, char **argv_orig, char **envp) {
 
   setup_cmdline_file(afl, argv + optind);
 
-  //xzw
-  extern u8 packet_fuzz ;
-  extern u8 is_perform_dry_run;
-  packet_fuzz = 1;
-  if (packet_fuzz) { 
-      is_perform_dry_run = 1; 
-  }
-  //xzw
-
   read_testcases(afl, NULL);  //xzw:获取我们给的种子?
+
   // read_foreign_testcases(afl, 1); for the moment dont do this
+
   OKF("Loaded a total of %u seeds.", afl->queued_items);
 
   pivot_inputs(afl);
@@ -2398,9 +2391,9 @@ int main(int argc, char **argv_orig, char **envp) {
   memset(afl->virgin_crash, 255, map_size);
 
   if (likely(!afl->afl_env.afl_no_startup_calibration)) {
-    if (!packet_fuzz) { perform_dry_run(afl); }
-    //xzw:结合calibrate去跑一下我们给的种子,packet_fuzz不需要perform_dry_run
-    is_perform_dry_run = 0;
+    //xzw:we do not need perform_dry_run
+    //perform_dry_run(afl); 
+
   } else {
 
     ACTF("skipping initial seed calibration due option override");
@@ -2732,20 +2725,7 @@ int main(int argc, char **argv_orig, char **envp) {
 
     ++runs_in_current_cycle;
 
-    
-    //xzw:相当于重启服务器
-    //send_tcp_hook();
-    extern u8 pre_cnt;
-    extern u8 rep_cnt;
-
-    u8 *mem = get_packet_by_id(0, pre_cnt, 0);
-    //printf("mem:%x,%x,%x,%x \n", mem[10], mem[11], mem[12]);
-    afl_fsrv_write_to_testcase(&afl->fsrv, mem, pre_q[0]->len);
-    write_to_num_file(afl, pre_q[0]);
-    ck_free(mem);
-    fuzz_run_target(afl,&afl->fsrv,100);
-
-    u8 cur_idx = 0; //xzw:记录rep_packet的index
+   
     
     do {
 
@@ -2761,12 +2741,8 @@ int main(int argc, char **argv_orig, char **envp) {
         }
 
         do {
-            if (packet_fuzz) {
-            while(afl->queue_buf[cur_idx]->rep_num == 0) { cur_idx++;}
-            afl->current_entry = cur_idx;
-          } else {
-            afl->current_entry = select_next_queue_entry(afl);
-            }
+
+        afl->current_entry = select_next_queue_entry(afl);
 
         } while (unlikely(afl->current_entry >= afl->queued_items) );
 

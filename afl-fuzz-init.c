@@ -29,8 +29,6 @@
 #include <string.h>
 #include "cmplog.h"
 
-//xzw
-u8 packet_fuzz;
 u8 is_perform_dry_run;
 
 
@@ -658,562 +656,180 @@ void read_foreign_testcases(afl_state_t *afl, int first) {
 /* Read all testcases from the input directory, then queue them for testing.
    Called at startup. */
 //xzw
-u8   seed_cnt=0;
+/*u8   seed_cnt=0;
 u32  pre_cnt = 0;
 u32  rep_cnt = 0;
 u32  non_cnt = 0;
-struct queue_entry *testcase_q;
-void   read_testcases(afl_state_t *afl, u8 *directory) {
+struct queue_entry *testcase_q;*/
+void read_testcases(afl_state_t * afl, u8 * directory) {
+    struct dirent **nl;
+    s32             nl_cnt, subdirs = 1;
+    u32             i;
+    u8             *fn1, *dir = directory;
+    u8              val_buf[2][STRINGIFY_VAL_SIZE_MAX];
 
-  struct dirent **nl;
-  s32             nl_cnt, subdirs = 1;
-  u32             i;
-  u8             *fn1, *dir = directory;
-  u8              val_buf[2][STRINGIFY_VAL_SIZE_MAX];
-  //xzw
-  u8 need_to_add=0;
+    /* Auto-detect non-in-place resumption attempts. */
 
-  if (packet_fuzz) {
-    // xzw
-   
-     for (int round = 0; round < MAX_PACKET; round++) {
-      pre_q[round] = (struct queue_entry *)calloc(1,sizeof(struct queue_entry));
-      rep_q[round] = (struct queue_entry *)calloc(1,sizeof(struct queue_entry));
-      non_q[round] = (struct queue_entry *)calloc(1,sizeof(struct queue_entry));
-    }
-   
-  }
+    if (dir == NULL) {
+      fn1 = alloc_printf("%s/queue", afl->in_dir);
+      if (!access(fn1, F_OK)) {
+        afl->in_dir = fn1;
+        subdirs = 0;
 
-  /* Auto-detect non-in-place resumption attempts. */
-
-  if (dir == NULL) {
-
-    fn1 = alloc_printf("%s/queue", afl->in_dir);
-    if (!access(fn1, F_OK)) {  //xzw:检查是否存在input_dir/queue文件
-        
-      afl->in_dir = fn1;
-      subdirs = 0;
-
-    } else {
-
-      ck_free(fn1);
-
-    }
-
-    dir = afl->in_dir;
-
-  }
-
-  ACTF("Scanning '%s'...", dir);
-
-  /* We use scandir() + alphasort() rather than readdir() because otherwise,
-     the ordering of test cases would vary somewhat randomly and would be
-     difficult to control. */
-
-  nl_cnt = scandir(dir, &nl, NULL, alphasort);  
-
-  /*/ int j;
-  for (j = 0; j < nl_cnt; j++) {
-    printf("%s\n", nl[j]->d_name);
-  }*/
-
-
-  if (nl_cnt < 0 && directory == NULL) {
-
-    if (errno == ENOENT || errno == ENOTDIR) {
-
-      SAYF("\n" cLRD "[-] " cRST
-           "The input directory does not seem to be valid - try again. The "
-           "fuzzer needs\n"
-           "    one or more test case to start with - ideally, a small file "
-           "under 1 kB\n"
-           "    or so. The cases must be stored as regular files directly in "
-           "the input\n"
-           "    directory.\n");
-
-    }
-
-    PFATAL("Unable to open '%s'", dir);
-
-  }
-
-  if (unlikely(afl->old_seed_selection && afl->shuffle_queue && nl_cnt > 1)) {
-
-    ACTF("Shuffling queue...");
-    shuffle_ptrs(afl, (void **)nl, nl_cnt);
-
-  }
-
-  // if (getenv("MYTEST")) afl->in_place_resume = 1;
-
-  if (nl_cnt) {
-
-    u32 done = 0;
-
-    if (unlikely(afl->in_place_resume)) {
-
-      i = nl_cnt;
-
-    } else {
-
-      i = 0;
-
-    }
-    
-    do {
-
-      if (unlikely(afl->in_place_resume)) { --i; }
-
-      struct stat st;
-      u8          dfn[PATH_MAX];
-      snprintf(dfn, PATH_MAX, "%s/.state/deterministic_done/%s", afl->in_dir,
-               nl[i]->d_name);
-      u8 *fn2 = alloc_printf("%s/%s", dir, nl[i]->d_name);
-
-      u8 passed_det = 0;
-     
-
-      if (lstat(fn2, &st) || access(fn2, R_OK)) { 
-       
-        PFATAL("Unable to access '%s'", fn2);
-
-      }
-      
-
-      /* obviously we want to skip "descending" into . and .. directories,
-         however it is a good idea to skip also directories that start with
-         a dot */
-      if (subdirs && S_ISDIR(st.st_mode) && nl[i]->d_name[0] != '.') {      //xzw:检索子目录下是否有？
-
-        free(nl[i]);                                         /* not tracked */
-        read_testcases(afl, fn2);
-        ck_free(fn2);
-        goto next_entry;
-
+      } else {
+        ck_free(fn1);
       }
 
-      free(nl[i]);
+      dir = afl->in_dir;
+    }
 
-      if (!S_ISREG(st.st_mode) || !st.st_size || strstr(fn2, "/README.txt")) {
+    ACTF("Scanning '%s'...", dir);
 
-        ck_free(fn2);
-        goto next_entry;
+    /* We use scandir() + alphasort() rather than readdir() because otherwise,
+       the ordering of test cases would vary somewhat randomly and would be
+       difficult to control. */
 
+    nl_cnt = scandir(dir, &nl, NULL, alphasort);
+
+    if (nl_cnt < 0 && directory == NULL) {
+      if (errno == ENOENT || errno == ENOTDIR) {
+        SAYF("\n" cLRD "[-] " cRST
+             "The input directory does not seem to be valid - try again. The "
+             "fuzzer needs\n"
+             "    one or more test case to start with - ideally, a small file "
+             "under 1 kB\n"
+             "    or so. The cases must be stored as regular files directly in "
+             "the input\n"
+             "    directory.\n");
       }
 
-      if (st.st_size > MAX_FILE) {
+      PFATAL("Unable to open '%s'", dir);
+    }
 
-        WARNF("Test case '%s' is too big (%s, limit is %s), partial reading",
-              fn2,
-              stringify_mem_size(val_buf[0], sizeof(val_buf[0]), st.st_size),
-              stringify_mem_size(val_buf[1], sizeof(val_buf[1]), MAX_FILE));
+    if (unlikely(afl->old_seed_selection && afl->shuffle_queue && nl_cnt > 1)) {
+      ACTF("Shuffling queue...");
+      shuffle_ptrs(afl, (void **)nl, nl_cnt);
+    }
 
+    // if (getenv("MYTEST")) afl->in_place_resume = 1;
+
+    if (nl_cnt) {
+      u32 done = 0;
+
+      if (unlikely(afl->in_place_resume)) {
+        i = nl_cnt;
+
+      } else {
+        i = 0;
       }
 
+      do {
+        if (unlikely(afl->in_place_resume)) { --i; }
 
-      // xzw
-      if (packet_fuzz) {   //xzw:在这里读取每一个包，并且把他们添加到对应的队列
-        u8 *fname = ck_strdup(nl[i]->d_name);
-        
-        if (strlen(nl[i]->d_name) < 3) {
-          ck_free(fname);
-          PFATAL("Wrong filename formate, in packet_fuzz you need to add ",
-                 "prefix to tell fuzz the type of packet\n");
+        struct stat st;
+        u8          dfn[PATH_MAX];
+        snprintf(dfn, PATH_MAX, "%s/.state/deterministic_done/%s", afl->in_dir,
+                 nl[i]->d_name);
+        u8 *fn2 = alloc_printf("%s/%s", dir, nl[i]->d_name);
+
+        u8 passed_det = 0;
+
+        if (lstat(fn2, &st) || access(fn2, R_OK)) {
+          PFATAL("Unable to access '%s'", fn2);
         }
-        u8 check_chars[4];  //xzw:用来检查前三个字节来判断包的类型
-        strncpy(check_chars, fname, 3);
-        check_chars[3] = '\0';  
 
-         int comparison_result_pre = strcmp(check_chars, "pre");
-         int comparison_result_rep = strcmp(check_chars, "rep");
-         int comparison_result_non = strcmp(check_chars, "non");
+        /* obviously we want to skip "descending" into . and .. directories,
+           however it is a good idea to skip also directories that start with
+           a dot */
+        if (subdirs && S_ISDIR(st.st_mode) && nl[i]->d_name[0] != '.') {
+          free(nl[i]); /* not tracked */
+          read_testcases(afl, fn2);
+          ck_free(fn2);
+          goto next_entry;
+        }
 
-        testcase_q =(struct queue_entry *)ck_alloc(sizeof(struct queue_entry));
-        testcase_q->fname = alloc_printf("%s/%s", dir, fname);
-        testcase_q->len = st.st_size >= MAX_FILE ? MAX_FILE : st.st_size;
-        //extern u8 *num_filename;
-        u8        *numfile_buf;
+        free(nl[i]);
 
-        if (comparison_result_pre == 0) {  //如果是前缀包
+        if (!S_ISREG(st.st_mode) || !st.st_size || strstr(fn2, "/README.txt")) {
+          ck_free(fn2);
+          goto next_entry;
+        }
 
-          testcase_q->pre_num = 1;
-          testcase_q->pre_id = (u8 *)ck_alloc(sizeof(u8) * testcase_q->pre_num);
-          testcase_q->pre_id[0] = pre_cnt;
+        if (st.st_size > MAX_FILE) {
+          WARNF("Test case '%s' is too big (%s, limit is %s), partial reading",
+                fn2,
+                stringify_mem_size(val_buf[0], sizeof(val_buf[0]), st.st_size),
+                stringify_mem_size(val_buf[1], sizeof(val_buf[1]), MAX_FILE));
+        }
 
-          pre_q[pre_cnt]->len = st.st_size >= MAX_FILE ? MAX_FILE : st.st_size;
-          pre_q[pre_cnt]->pre_num = 1;
-          pre_q[pre_cnt]->pre_id =
-              (u8 *)ck_alloc(sizeof(u8) * testcase_q->pre_num);
-          pre_q[pre_cnt]->pre_id[0] = pre_cnt;
-          pre_q[pre_cnt]->fname = ck_strdup(testcase_q->fname);
-          pre_q[pre_cnt]->id = pre_cnt;
+        /* Check for metadata that indicates that deterministic fuzzing
+           is complete for this entry. We don't want to repeat deterministic
+           fuzzing when resuming aborted scans, because it would be pointless
+           and probably very time-consuming. */
 
+        if (!access(dfn, F_OK)) { passed_det = 1; }
 
-            add_to_queue(afl, testcase_q->fname, pre_q[pre_cnt]->len, passed_det);
+        add_to_queue(afl, fn2, st.st_size >= MAX_FILE ? MAX_FILE : st.st_size,
+                     passed_det);
 
-            pre_cnt++;
+        if (unlikely(afl->shm.cmplog_mode)) {
+          if (afl->cmplog_lvl == 1) {
+            if (!afl->cmplog_max_filesize ||
+                afl->cmplog_max_filesize < st.st_size) {
+              afl->cmplog_max_filesize = st.st_size;
+            }
 
-        } else if (comparison_result_rep == 0) {
+          } else if (afl->cmplog_lvl == 2) {
+            if (!afl->cmplog_max_filesize ||
+                afl->cmplog_max_filesize > st.st_size) {
+              afl->cmplog_max_filesize = st.st_size;
+            }
+          }
+        }
 
-            testcase_q->rep_num = 1;
-            testcase_q->rep_id = (u8 *)ck_alloc(sizeof(u8) * testcase_q->rep_num);
-            testcase_q->rep_id[0] =rep_cnt ;
-
-            rep_q[rep_cnt]->len = st.st_size >= MAX_FILE ? MAX_FILE : st.st_size;
-            rep_q[rep_cnt]->rep_num = 1;
-            rep_q[rep_cnt]->rep_id =(u8 *)ck_alloc(sizeof(u8) * testcase_q->rep_num);
-            rep_q[rep_cnt]->rep_id[0] = rep_cnt;
-            rep_q[rep_cnt]->fname = ck_strdup(testcase_q->fname);
-            rep_q[rep_cnt]->id = rep_cnt;
-
-            
-            add_to_queue(afl, testcase_q->fname, rep_q[rep_cnt]->len, passed_det);
-            
-
-            rep_cnt++;
-
-        } else if (comparison_result_non == 0) {
-
-            testcase_q->non_num = 1;
-            testcase_q->non_id =
-                (u8 *)ck_alloc(sizeof(u8) * testcase_q->non_num);
-            testcase_q->non_id[0] = non_cnt;
-
-            non_q[non_cnt]->len =
-                st.st_size >= MAX_FILE ? MAX_FILE : st.st_size;
-            non_q[non_cnt]->non_num = 1;
-            non_q[non_cnt]->non_id =
-                (u8 *)ck_alloc(sizeof(u8) * testcase_q->non_num);
-            non_q[non_cnt]->non_id[0] = non_cnt;
-            non_q[non_cnt]->fname = ck_strdup(testcase_q->fname);
-            non_q[non_cnt]->id = non_cnt;
-            
-            add_to_queue(afl, testcase_q->fname, non_q[non_cnt]->len, passed_det);
-            
-            
-            non_cnt++;
+      next_entry:
+        if (unlikely(afl->in_place_resume)) {
+          if (unlikely(i == 0)) { done = 1; }
 
         } else {
-            PFATAL(
-                "Unrecognized file name:%s,in packet_fuzz you need to provide "
-                "the correct prefix(pre, rep, non)",
-                fname);
+          if (unlikely(++i >= (u32)nl_cnt)) { done = 1; }
         }
 
-
-
-
-        /* if (check_chars == "pre") {
-            pre_cnt++;
-
-          pre_q[pre_cnt]->id = pre_cnt;
-          add_to_queue(afl, fname, pre_q[pre_cnt]->len, passed_det);
-          
-        }
-        if (nl[i]->d_name[0] == 'r' && nl[i]->d_name[1] == 'e' &&
-            nl[i]->d_name[2] == 'p') {
-          rep_q[rep_cnt]->fname = alloc_printf("%s/%s", dir,fname);
-          rep_q[rep_cnt]->len = st.st_size >= MAX_FILE ? MAX_FILE : st.st_size;
-          rep_q[rep_cnt]->id = rep_cnt;
-          add_to_queue(afl, fname, rep_q[pre_cnt]->len, passed_det);
-          rep_cnt++;
-          
-        }
-        if (nl[i]->d_name[0] == 'n' && nl[i]->d_name[1] == 'o' &&
-            nl[i]->d_name[2] == 'n') {
-          non_q[non_cnt]->fname = alloc_printf("%s/%s", dir, fname);
-          non_q[non_cnt]->len = st.st_size >= MAX_FILE ? MAX_FILE : st.st_size;
-          non_q[non_cnt]->id = non_cnt;
-          add_to_queue(afl, fname, non_q[pre_cnt]->len, passed_det);
-          non_cnt++;
-        }*/
-        ck_free(fname);
-        
-        ck_free(testcase_q);
-        goto next_entry;
-      }
-
-
-      /* Check for metadata that indicates that deterministic fuzzing
-         is complete for this entry. We don't want to repeat deterministic
-         fuzzing when resuming aborted scans, because it would be pointless
-         and probably very time-consuming. */
-    to_add:
-      if (!access(dfn, F_OK)) { passed_det = 1; }
-
-      //xzw
-      if (packet_fuzz ) {  //xzw:生成calibrate的种子
-
-          struct exp3_state *pre_state =
-            (struct exp3_state *)ck_alloc(sizeof(struct exp3_state));
-        struct exp3_state *rep_state =
-            (struct exp3_state *)ck_alloc(sizeof(struct exp3_state));
-        struct exp3_state *non_state =
-            (struct exp3_state *)ck_alloc(sizeof(struct exp3_state));
-        struct exp3_state *cur_state =
-            (struct exp3_state *)ck_alloc(sizeof(struct exp3_state));
-
-
-
-        pre_state->nbArms = pre_cnt;
-        rep_state->nbArms = rep_cnt;
-        non_state->nbArms = non_cnt;
-
-        pre_state->id = (u8 *)ck_alloc(sizeof(u8) * pre_cnt);
-        rep_state->id = (u8 *)ck_alloc(sizeof(u8) * rep_cnt);
-        non_state->id = (u8 *)ck_alloc(sizeof(u8) * non_cnt);
-
-        for (int i = 0; i < pre_cnt; i++) {
-          pre_state->id[i] = pre_q[i]->id;
-        }
-        for (int i = 0; i < rep_cnt; i++) {
-          rep_state->id[i] = rep_q[i]->id;
-        }
-        for (int i = 0; i < non_cnt; i++) {
-          non_state->id[i] = non_q[i]->id;
-        }
-
-        EXP3_init(pre_state, pre_state->nbArms, afl->garmma);
-        EXP3_init(rep_state, rep_state->nbArms, afl->garmma);
-        EXP3_init(non_state, non_state->nbArms, afl->garmma);
-
-           /* for (int pre = 0; pre < pre_cnt; pre++) {
-
-            for(int rep = 0;rep < rep_cnt; rep++){
-
-                for (int non=0;non<non_cnt;non++){
-
-                seed_cnt++;
-
-                FILE *pre_file = fopen(pre_q[pre]->fname, "r");
-                FILE *rep_file = fopen(rep_q[pre]->fname, "r");
-                FILE *non_file = fopen(non_q[pre]->fname, "r");
-                 extern u8 *num_filename;
-                num_filename = alloc_printf("%s/.num_cur_input_%d_%d_%d",afl->out_dir);
-                
-                u8 *filename = alloc_printf("%s/modified_seed_%d_%d_%d",dir,pre,rep,non );
-                
-                FILE *modified_file = fopen(filename, "w");
-
-                if (modified_file == NULL) {
-                  ck_free(filename);
-                  PFATAL("Can't create file:%s", filename);
-                }
-                
-                u32 packet_length =pre_q[pre]->len + rep_q[rep]->len + non_q[non]->len;
-                
-                int c;
-
-                while ((c = fgetc(pre_file)) != EOF) {
-                  fputc(c, modified_file);
-                }
-
-                while ((c = fgetc(rep_file)) != EOF) {
-                  fputc(c, modified_file);
-                }
-
-                while ((c = fgetc(non_file)) != EOF) {
-                  fputc(c, modified_file);
-                }
-                //u8 *numfile_buf = alloc_printf("p 1 %d r 1 %d n 1 %d",pre_q[pre]->len, rep_q[rep]->len, non_q[non]->len); //写下包的个数和长度
-                fclose(pre_file);
-                fclose(rep_file);
-                fclose(non_file);
-                fclose(modified_file);
-                
-                int fd = open(num_filename, O_WRONLY | O_CREAT | O_APPEND);
-                ck_write(fd, numfile_buf, strlen(numfile_buf), num_filename);
-                ck_free(numfile_buf);
-                add_to_queue(afl, filename, packet_length >= MAX_FILE ? MAX_FILE : packet_length, passed_det);  //xzw:两个种子调两次add_to_queue
-                //ck_free(filename);
-                }
-            }
-          }*/
-
-          /* for (int pre = 0; pre < pre_cnt; pre++) {
-            EXP3_init(&pre_q[pre], pre_cnt, afl->garmma);
-          }
-
-         for (int rep = 0; rep < rep_cnt; rep++) {
-            EXP3_init(&rep_q[rep], rep_cnt, afl->garmma);
-         }
-
-         for (int non = 0; non < non_cnt; non++) {
-            EXP3_init(&non_q[non], non_cnt, afl->garmma);
-         }*/
-
-      } else {
-      add_to_queue(afl, fn2, st.st_size >= MAX_FILE ? MAX_FILE : st.st_size,
-                   passed_det);
-      }
-
-      if (unlikely(afl->shm.cmplog_mode)) {
-
-        if (afl->cmplog_lvl == 1) {
-
-          if (!afl->cmplog_max_filesize ||
-              afl->cmplog_max_filesize < st.st_size) {
-
-            afl->cmplog_max_filesize = st.st_size;
-
-          }
-
-        } else if (afl->cmplog_lvl == 2) {
-
-          if (!afl->cmplog_max_filesize ||
-              afl->cmplog_max_filesize > st.st_size) {
-
-            afl->cmplog_max_filesize = st.st_size;
-
-          }
-
-        }
-
-      }
-      if (need_to_add) { break; }
-    next_entry:
-      if (unlikely(afl->in_place_resume)) {
-
-
-        if (unlikely(i == 0)) { done = 1; }
-
-      } else {
-
-        if (unlikely(++i >= (u32)nl_cnt) ) { 
-            done = 1;
-            need_to_add=1;
-          if (need_to_add) { 
-              goto to_add;
-          }
-        }
-
-      }
-      //xzw
-    } while (!done);
-
-  }
-
-  // if (getenv("MYTEST")) afl->in_place_resume = 0;
-
-  free(nl);                                                  /* not tracked */
-
-  if (!afl->queued_items && directory == NULL) {
-
-    SAYF("\n" cLRD "[-] " cRST
-         "Looks like there are no valid test cases in the input directory! The "
-         "fuzzer\n"
-         "    needs one or more test case to start with - ideally, a small "
-         "file under\n"
-         "    1 kB or so. The cases must be stored as regular files directly "
-         "in the\n"
-         "    input directory.\n");
-
-    FATAL("No usable test cases in '%s'", afl->in_dir);
-
-  }
-
-  if (unlikely(afl->shm.cmplog_mode)) {
-
-    if (afl->cmplog_max_filesize < 1024) {
-
-      afl->cmplog_max_filesize = 1024;
-
-    } else {
-
-      afl->cmplog_max_filesize = (((afl->cmplog_max_filesize >> 10) + 1) << 10);
-
+      } while (!done);
     }
 
-  }
+    // if (getenv("MYTEST")) afl->in_place_resume = 0;
 
-  afl->last_find_time = 0;
-  afl->queued_at_start = afl->queued_items;
+    free(nl); /* not tracked */
 
-}
-//xzw
-// 
-//  Choose randomly accordingly to the trusts
-//  https://github.com/SMPyBandits/SMPyBandits/blob/master/SMPyBandits/Policies/Exp3.py#L111
-s32 EXP3_choice(afl_state_t *afl, struct exp3_state *s) {
-  if (s->t < s->nbArms) {
-    return s->t;
-  } else {
-    EXP3_trusts(afl, s);
-    return EXP3_weighted_random(afl, s->trusts, s->nbArms);
-  }
-}
+    if (!afl->queued_items && directory == NULL) {
+      SAYF("\n" cLRD "[-] " cRST
+           "Looks like there are no valid test cases in the input directory! "
+           "The "
+           "fuzzer\n"
+           "    needs one or more test case to start with - ideally, a small "
+           "file under\n"
+           "    1 kB or so. The cases must be stored as regular files directly "
+           "in the\n"
+           "    input directory.\n");
 
-static s32 EXP3_weighted_random(afl_state_t *afl, double *trusts, s32 nbArms) {
-  double sum, rnd;
-  int    i;
-
-  sum = EXP3_sum(trusts, nbArms);
-  rnd = (double)rand_below(afl, RAND_MAX) / (double)RAND_MAX * sum;
-  for (i = 0; i < nbArms; i++) {
-    if (rnd < trusts[i]) return i;
-
-    rnd -= trusts[i];
-  }
-
-  PFATAL("EXP3_weighted_random");
-}
-
-static double EXP3_sum(double *arr, s32 n) {
-  double sum;
-  int    i;
-
-  sum = 0.f;
-  for (i = 0; i < n; i++) {
-    sum += arr[i];
-  }
-
-  return sum;
-}
-
-// Update trusts
-// https://github.com/SMPyBandits/SMPyBandits/blob/master/SMPyBandits/Policies/Exp3.py#L67
-static void EXP3_trusts(__attribute__((unused)) afl_state_t *afl,
-                        struct exp3_state                   *s) {
-  double sum;
-  u32    i;
-
-  for (i = 0; i < s->nbArms; i++) {
-    s->trusts[i] = ((1.f - s->gamma) * s->weights[i]) + (s->gamma / s->nbArms);
-
-    if (isinf(s->trusts[i])) s->trusts[i] = 0;
-  }
-
-  sum = EXP3_sum(s->trusts, s->nbArms);
-
-  if (sum <= 1e-8) {
-    for (u32 i = 0; i < s->nbArms; i++) {
-      s->trusts[i] = 1.f / s->nbArms;
+      FATAL("No usable test cases in '%s'", afl->in_dir);
     }
 
-    sum = EXP3_sum(s->trusts, s->nbArms);
+    if (unlikely(afl->shm.cmplog_mode)) {
+      if (afl->cmplog_max_filesize < 1024) {
+        afl->cmplog_max_filesize = 1024;
+
+      } else {
+        afl->cmplog_max_filesize =
+            (((afl->cmplog_max_filesize >> 10) + 1) << 10);
+      }
+    }
+
+    afl->last_find_time = 0;
+    afl->queued_at_start = afl->queued_items;
   }
-  PFATAL("sum can't be 0\n");
 
-  for (i = 0; i < s->nbArms; i++) {
-    s->trusts[i] /= sum;
-  }
-}
-
-void EXP3_init(struct exp3_state *s, int arms, double gamma) {
-  u32 i;
-
-  s->t = 0;
-  s->nbArms = arms;
-  s->gamma = gamma;
-
-  for (i = 0; i < s->nbArms; i++) {
-  s->weights[i] = 1.f / s->nbArms;
-  s->rewards[i] = 0;
-  s->trusts[i] = 1.f / s->nbArms;
-  }
-}
-
-//xzw
 void copy_queue_entry_fields(struct queue_entry *dest,
                              struct queue_entry *src) {
   dest->pre_num = src->pre_num;
@@ -1235,121 +851,71 @@ void copy_queue_entry_fields(struct queue_entry *dest,
   dest->fname = ck_strdup(src->fname);  
 }
 
-u32 find_len_by_id(u32 id, u32 queue_size, int queue_type) {
-  struct packet_queue **selected_queue;
-  int                   i = 0;
-  //xzw:
-  //0代表pre
-  //1代表rep
-  //2代表non
-  switch (queue_type) {
-    case PRE_PACKET:
-      selected_queue = pre_q;
-      break;
-    case REP_PACKET:
-      selected_queue = rep_q;
-      break;
-    case NON_PACKET:
-      selected_queue = non_q;
-      break;
-    default:
+//xzw
+static u32 __attribute__((hot))
+read_s32_timed(s32 fd, s32 *buf, u32 timeout_ms, volatile u8 *stop_soon_p) {
+  fd_set readfds;
+  FD_ZERO(&readfds);
+  FD_SET(fd, &readfds);
+  struct timeval timeout;
+  int            sret;
+  ssize_t        len_read;
+
+  timeout.tv_sec = (timeout_ms / 1000);
+  timeout.tv_usec = (timeout_ms % 1000) * 1000;
+#if !defined(__linux__)
+  u32 read_start = get_cur_time_us();
+#endif
+
+  /* set exceptfds as well to return when a child exited/closed the pipe. */
+restart_select:
+  sret = select(fd + 1, &readfds, NULL, NULL, &timeout);
+
+  if (likely(sret > 0)) {
+  restart_read:
+    if (*stop_soon_p) {
+      // Early return - the user wants to quit.
       return 0;
+    }
+
+    len_read = read(fd, (u8 *)buf, 4);
+
+    if (likely(len_read == 4)) {  // for speed we put this first
+
+#if defined(__linux__)
+      u32 exec_ms = MIN(
+          timeout_ms,
+          ((u64)timeout_ms - (timeout.tv_sec * 1000 + timeout.tv_usec / 1000)));
+#else
+      u32 exec_ms = MIN(timeout_ms, (get_cur_time_us() - read_start) / 1000);
+#endif
+
+      // ensure to report 1 ms has passed (0 is an error)
+      return exec_ms > 0 ? exec_ms : 1;
+
+    } else if (unlikely(len_read == -1 && errno == EINTR)) {
+      goto restart_read;
+
+    } else if (unlikely(len_read < 4)) {
+      return 0;
+    }
+
+  } else if (unlikely(!sret)) {
+    *buf = -1;
+    return timeout_ms + 1;
+
+  } else if (unlikely(sret < 0)) {
+    if (likely(errno == EINTR)) goto restart_select;
+
+    *buf = -1;
+    return 0;
   }
 
-  for ( i = 0; i < queue_size; ++i) {
-    if (selected_queue[i] != NULL && selected_queue[i]->id == id) {
-      selected_queue[i]->used = 1;
-      return selected_queue[i]->len;
-    }
-  }
+  return 0;  // not reached
 }
-
-//xzw
-void get_id_by_filename(struct queue_entry *q) {
-    //xzw
-  u8 *result = strstr(q->fname, "modified_seed_");
-  u8  id;
-  if (result == NULL) { 
-      PFATAL("modified seed not found.\n"); 
-  }
-
-  result += strlen("modified_seed_");
-
-  if (q->pre_num > 0) {
-    q->pre_id = (u8 *)ck_alloc(sizeof(u8) * (q->pre_num));
-    for (int i = 0; i < q->pre_num; i++) {
-      sscanf(result, "%d", &id);
-      q->pre_id[i] = id;
-      result = strchr(result + 1, '_');
-      result++;
-    }
-  }
-  if (q->rep_num > 0) {
-    q->rep_id = (u8 *)ck_alloc(sizeof(u8) * (q->rep_num));
-    for (int i = 0; i < q->rep_num; i++) {
-      sscanf(result, "%d", &id);
-      q->rep_id[i] = id;
-      result = strchr(result + 1, '_');
-      result++;
-    }
-  }
-  if (q->non_num > 0) {
-    q->non_id = (u8 *)ck_alloc(sizeof(u8) * (q->non_num));
-    for (int i = 0; i < q->non_num; i++) {
-      sscanf(result, "%d", &id);
-      q->non_id[i] = id;
-      result = strchr(result + 1, '_');
-      result++;
-    }
-  }
-}
-
-//xzw
+    
 extern int send_pipe[2];
 extern int recv_pipe[2];
-void send_pre_packet(afl_state_t *afl) {
-    //xzw:实际上就是写一个pre[0]包
-    //xzw:在fsrv已经启动的情况下,确保之前的fd已经断开or不存在可以做的是：
-    //xzw:send_tcp_hook,send_to_hook,read_from_hook这样就模拟了一次发送
-  u8 *mem = get_packet_by_id(0, pre_cnt, 0);
-  afl_fsrv_write_to_testcase(&afl->fsrv, *mem, pre_q[0]->len);
-  write_to_num_file(afl, pre_q[0]);
-  printf("sned_pre_packet\n");
-  send_tcp_hook();
-  ck_free(mem);
-  int  check_send, check_recv;
-  char buf[4];
-
-  if ((check_send = write(send_pipe[1], "HALO", 4)) < 0) {
-    WARNF("Unable to write ");
-  }
-
-}  
-// xzw
-  void write_to_num_file_by_len(afl_state_t *afl,u32 len) {
-  u8 *num_filename;
-  u8 *num_file_buf;
-  u32 max_file_size = 4096;
-
-  num_filename = alloc_printf("%s/.num_cur_input", afl->out_dir);
-  num_file_buf = ck_alloc(max_file_size);
-
-   int fd = open(num_filename, O_RDWR | O_TRUNC | O_CREAT, DEFAULT_PERMISSION);
-
-  if (fd < 0) {
-    ck_free(num_filename);
-    ck_free(num_file_buf);
-    PFATAL("Open num_file failed");
-  }
-  strcat((char *)num_file_buf, "p ");
-  snprintf((char *)num_file_buf + strlen((char *)num_file_buf),
-           max_file_size - strlen((char *)num_file_buf), "%d ", len);
-  ck_write(fd, num_file_buf, strlen(num_file_buf),num_filename);
-  ck_free(num_filename);
-  ck_free(num_file_buf);
-  close(fd);
-  }
-
 
 void write_to_num_file(afl_state_t *afl, struct queue_entry *q) {
   // xzw
@@ -1435,10 +1001,6 @@ void perform_dry_run(afl_state_t *afl) {  //xzw:在我们这样的packet_fuzz中
 
     u8  res;
     s32 fd;
-
-    //xzw
-    write_to_num_file(afl, q);
-
 
 
     if (unlikely(!q->len)) {

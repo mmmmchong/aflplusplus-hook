@@ -462,7 +462,6 @@ save_if_interesting(afl_state_t *afl, void *mem, u32 len, u8 fault) {
   extern u8  need_send_pre_packet;
   u8         find = 0;
   u8         round = 0;
-  u8        *num_file_buf;
   int        i, j;
   u8         done = 0;
   u8        *send_buf;
@@ -471,7 +470,6 @@ save_if_interesting(afl_state_t *afl, void *mem, u32 len, u8 fault) {
   extern u32 test_bitmap_size;
   u8         ret;
   u32        original_bitmap = test_bitmap_size;
-  extern u8  packet_fuzz;
   u8         type = REP_PACKET;
 
   new_q = (struct queue_entry *)ck_alloc(sizeof(struct queue_entry));
@@ -555,8 +553,7 @@ save_if_interesting(afl_state_t *afl, void *mem, u32 len, u8 fault) {
     close(fd);
 
     //xzw:
-
-    modify_queue(new_q,type);
+   
 
     add_to_queue(afl, queue_fn, len, 0);
 
@@ -629,9 +626,9 @@ save_if_interesting(afl_state_t *afl, void *mem, u32 len, u8 fault) {
     /* Try to calibrate inline; this also calls update_bitmap_score() when
        successful. */
 
-    if (!packet_fuzz) {
-      res = calibrate_case(afl, afl->queue_top, mem, afl->queue_cycle - 1, 0);
-
+      //xzw:不要calibration
+      //res = calibrate_case(afl, afl->queue_top, mem, afl->queue_cycle - 1, 0);
+    res = FSRV_RUN_OK;
       if (unlikely(res == FSRV_RUN_ERROR)) {
         FATAL("Unable to execute target application");
       }
@@ -639,7 +636,7 @@ save_if_interesting(afl_state_t *afl, void *mem, u32 len, u8 fault) {
       if (likely(afl->q_testcase_max_cache_size)) {
         queue_testcase_store_mem(afl, afl->queue_top, mem);
       }
-    }
+    
 
     keeping = 1;
 
@@ -753,53 +750,7 @@ save_if_interesting(afl_state_t *afl, void *mem, u32 len, u8 fault) {
 
         }
 
-      } else if (use_net && packet_fuzz) {//xzw:此时有新的bitmap，需要对他进行处理
-        
-
-      
-        num_file_buf = read_numfile_buf(afl);
-
-        round = strlen(num_file_buf);
-       
-        while (i < round) {
-          for (j = i + 1; j <= round; j++) {
-            length = num_file_buf[j] - num_file_buf[i];
-
-            u8 *send_buf = ck_realloc(send_buf, length);
-
-            memcpy(send_buf, mem + num_file_buf[i], length);
-
-            ret = try_rep_packet(afl, original_bitmap, length, send_buf);
-            if (ret > 0) {
-              mem = send_buf;
-              len = length;
-              type = REP_PACKET;
-              
-              goto save_to_queue;
-            }
-          }
-          i++;
-        }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-      
-      
-      }
+      } 
 
 #ifndef SIMPLE_FILES
 
@@ -954,94 +905,3 @@ save_if_interesting(afl_state_t *afl, void *mem, u32 len, u8 fault) {
 
 }
 
-u8 *read_numfile_buf(afl_state_t *afl) {
-  u8 *num_filename;
-  u8 tmp;
-  u8 *buf;
-  u8      read_length = 0;
-  ssize_t  bytes_read;
-
-  num_filename = alloc_printf("%s/.num_cur_input", afl->out_dir);
-  buf = ck_alloc(256);
-  int fd = open(num_filename, O_RDONLY );
-
-  if (fd < 0) {
-    ck_free(num_filename);
-    PFATAL("Open num_file failed");
-  }
-  buf[0] = 0;
-  u8 pos = 1;
-  u8 num = 0;
-  while ((bytes_read = read(fd, &tmp,1)) > 0) {
-      if (tmp == ' ') { 
-          buf[pos] = num;
-          num = 0;
-          pos++;
-      } else {
-          num = num * 10 + tmp;
-      }
-  }
-  if (num > 0) {
-      if (pos > 0) {
-          buf[pos] = buf[pos - 1] + num;
-      } else {
-          buf[pos] = num;
-      }
-  }
-
-  close(fd);
-
-  ck_free(num_filename);  
-
-  return buf;   
-}
-
-u8 try_rep_packet(afl_state_t *afl, u8 original_bitmap,u8 length,u8 * send_buf) {
-  u8  find = 1;
-  extern u8 have_write_to_num_file;
-  extern u32 test_bitmap_size;
-  for (int r = 0; r < 10; r++) {
-//todo sned_buf应该截取包的一部分
-      write_to_num_file_by_len(afl, length);
-      have_write_to_num_file = 1;
-
-      write_to_testcase(afl, (void **)&send_buf, length, 0);
-
-      fsrv_run_result_t res =
-          fuzz_run_target(afl, &afl->fsrv, afl->fsrv.exec_tmout);
-
-      if (res == FSRV_RUN_TMOUT) {
-          find = 0;
-          break;
-      } else if (test_bitmap_size >= original_bitmap/2) {
-          continue;
-      }
-  
-  }
-  return find;
-}
-
-void modify_queue(struct queue_entry *q, u8 type) {
-  extern u32 pre_cnt, rep_cnt, non_cnt;
-  switch (type) { 
-  case PRE_PACKET:
-          q->pre_num = 1;
-          q->pre_id = (u8 *)ck_alloc(sizeof(u8) * q->pre_num);
-          q->pre_id[0] = pre_cnt;
-          pre_cnt++;
-          break;
-  case REP_PACKET:
-          q->rep_num = 1;
-          q->rep_id = (u8 *)ck_alloc(sizeof(u8) * q->rep_num);
-          q->rep_id[0] = rep_cnt;
-          rep_cnt++;
-          break;
-  case NON_PACKET:
-          q->non_num = 1;
-          q->non_id = (u8 *)ck_alloc(sizeof(u8) * q->non_num);
-          q->non_id[0] = non_cnt;
-          non_cnt++;
-          break;
-  }
-
-}

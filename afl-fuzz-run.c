@@ -43,6 +43,13 @@ u64 time_spent_working = 0;
 //xzw
 u32 test_bitmap_size;
 u8  is_new_start = 1;
+// xzw add for ewma
+double ewma_alpha = 0.30;  // alpha值
+double ewma_avg = 10.00;   // EWMA值
+double threshold = 10.00;  // 阈值
+double first_bitmap = 0.0;
+u8    first_state = 1;
+
     fsrv_run_result_t __attribute__((hot))
 fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
 
@@ -66,18 +73,30 @@ fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
     afl_fsrv_write_to_testcase(fsrv, mem, pre_q[0]->len);
     ck_free(mem);
   }*/
-  extern u8 need_send_pre_packet;
-  if (need_send_pre_packet) { 
-      send_pre_packet(afl);
-    need_send_pre_packet = 0;
+
+
+  
+ if (ewma_avg < 10.0) {
+    kill(fsrv->child_pid, 0);
+    ewma_avg = first_bitmap;
   }
+
       fsrv_run_result_t res =
           afl_fsrv_run_target(fsrv, timeout, &afl->stop_soon);
       //add
  test_bitmap_size = count_bytes(afl, afl->fsrv.trace_bits);
-  if (test_bitmap_size > max_bitsize) { max_bitsize = test_bitmap_size;
-  }
-  printf("bitmap_size:%u\n", test_bitmap_size);
+
+
+
+
+ if (first_state) { 
+     first_bitmap = (double)test_bitmap_size;
+    ewma_avg = ewma(first_bitmap, (double)test_bitmap_size, ewma_alpha);
+    first_state = 0;
+ } else {
+     ewma_avg = ewma(ewma_avg, (double)test_bitmap_size, ewma_alpha);
+ }
+  //printf("bitmap_size:%u\n", test_bitmap_size);
 
   //add
   //xzw
@@ -107,11 +126,22 @@ write_to_testcase(afl_state_t *afl, void **mem, u32 len, u32 fix) {
     //xzw TODO:这里应该要用算法来抓取合适的包并且组成一个种子，抓取的包应该由强化学习exp3来决定
     //
   u8 sent = 0;
-  extern u8 have_write_to_num_file;
-  extern u8 need_send_pre_packet;
 
+  
+  num_filename = alloc_printf("%s/.num_cur_input", afl->out_dir);
+  u8 *num_buf;
 
+  int num_fd = open(num_filename, O_RDWR | O_TRUNC | O_CREAT, DEFAULT_PERMISSION);
 
+ if (num_fd < 0) {
+    FATAL("Open num_file failed");
+  }
+
+ ck_write(num_fd, &len, sizeof(len), afl->out_dir);
+ //printf("fuzz write to num file,length=%u\n",len);
+
+ ck_free(num_filename);
+ close(num_fd);
 
   if (unlikely(afl->custom_mutators_count)) {
 
@@ -201,32 +231,20 @@ write_to_testcase(afl_state_t *afl, void **mem, u32 len, u32 fix) {
       });
 
     }
-
+    //xzw 在write_to_testcase之前就判断是否需要重新发前缀包
+    //extern u8 need_send_pre_packet;
     if (likely(!sent)) {
-
-      //xzw:在每次更新.cur_input时也要更新.num_cur_input
-      //xzw:除了已经write_to_num_file_by_len时
-      if (!have_write_to_num_file) {
-        write_to_num_file(afl, afl->queue_cur);
-      } else {
-        have_write_to_num_file = 0;
-      }
-       
       /* everything as planned. use the potentially new data. */
       afl_fsrv_write_to_testcase(&afl->fsrv, *mem, new_size);
 
       if (likely(!afl->afl_env.afl_post_process_keep_original)) {
-
         len = new_size;
 
       } else {
-
         /* restore the original memory which was saved in new_mem */
         *mem = new_mem;
         afl_swap_bufs(AFL_BUF_PARAM(out), AFL_BUF_PARAM(out_scratch));
-
       }
-
     }
 
   } else {
@@ -256,15 +274,8 @@ write_to_testcase(afl_state_t *afl, void **mem, u32 len, u32 fix) {
 
     }
 
-    if (likely(!sent)) {
-      // xzw:在每次更新.cur_input时也要更新.num_cur_input
-      // xzw:变异后包的长度可能发送改变，此时已经write_to_numfile_by_len就不用write_to_num_file了
+     if (likely(!sent)) {
 
-      if (!have_write_to_num_file) {
-        write_to_num_file(afl, afl->queue_cur);
-      } else {
-        have_write_to_num_file = 0;
-      }
       /* boring uncustom. */
       afl_fsrv_write_to_testcase(&afl->fsrv, *mem, len);
 
@@ -534,8 +545,6 @@ u8 calibrate_case(afl_state_t *afl, struct queue_entry *q, u8 *use_mem,
   if (unlikely(afl->shm.cmplog_mode)) {
 
     (void)write_to_testcase(afl, (void **)&use_mem, q->len, 1);
-
-
 
     fault = fuzz_run_target(afl, &afl->fsrv, use_tmout);
    
@@ -1142,12 +1151,6 @@ u8 __attribute__((hot))
 common_fuzz_stuff(afl_state_t *afl, u8 *out_buf, u32 len) {
 
   u8 fault;
-  extern u8 packet_fuzz;
-  //xzw
-  if (packet_fuzz) { 
-      write_to_num_file_by_len(afl,len); 
-      have_write_to_num_file = 1;
-  }
 
   if (unlikely(len = write_to_testcase(afl, (void **)&out_buf, len, 0)) == 0) {  //xzw:todo
 
@@ -1179,7 +1182,7 @@ common_fuzz_stuff(afl_state_t *afl, u8 *out_buf, u32 len) {
 
   /* Users can hit us with SIGUSR1 to request the current input
      to be abandoned. */
-
+  
   if (afl->skip_requested) {
 
     afl->skip_requested = 0;
@@ -1206,3 +1209,8 @@ common_fuzz_stuff(afl_state_t *afl, u8 *out_buf, u32 len) {
 
 }
 
+
+//xzw add for ewma
+double ewma(double prev_avg, double value, double alpha) {
+  return alpha * value + (1 - alpha) * prev_avg;
+}

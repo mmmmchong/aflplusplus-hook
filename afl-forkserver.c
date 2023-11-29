@@ -323,7 +323,7 @@ restart_select:
 
     len_read = read(fd, (u8 *)buf, 4);
     //xzw:
-    printf("read from hook success\n");
+    //printf("read from hook success\n");
 
     if (likely(len_read == 4)) {  // for speed we put this first
 
@@ -1482,7 +1482,7 @@ afl_fsrv_write_to_testcase(afl_forkserver_t *fsrv, u8 *buf, size_t len) {
   // zyp
   testcase_buf = buf;
   testcase_len = len;
-  printf("afl_fsrv_write_to_testcase called, len=%d \n", len);
+  //printf("afl_fsrv_write_to_testcase called, len=%d \n", len);
   // return;
 #ifdef __linux__
   if (unlikely(fsrv->nyx_mode)) {
@@ -1582,6 +1582,7 @@ afl_fsrv_write_to_testcase(afl_forkserver_t *fsrv, u8 *buf, size_t len) {
     //printf("mem:%x,%x,%x,%x \n", buf[10], buf[11], buf[12]);
     // fprintf(stderr, "WRITE %d %u\n", fd, len);
     //printf("\nfd:%d\n", fd);
+
     ck_write(fd, buf, len, fsrv->out_file);    //xzw:这里是真正写入的地方，到时候要modified的地方
                                                //fd实际上就是.cut_input，关注buf的来源
     if (fsrv->use_stdin) {
@@ -1978,8 +1979,7 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
     FATAL("Fork server is misbehaving (OOM?)");
 
   }
-  extern u8 pre_cnt;
-  extern struct queue_entry *pre_q; 
+
   // zyp
   if (is_new_start) {
     usleep(new_start_server_waitusecs);
@@ -2017,17 +2017,23 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
     if ((check_send = write(send_pipe[1], "HALO", 4)) < 0) {
       WARNF("Unable to write ");
     }
-
+    //exec_ms = 1;
     // 改为处理完当前种子hook端再向fuzzer发消息，因此这里同样需要等待完成
     u32 dummyv = 0;
     exec_ms = read_s32_timed(recv_pipe[0], &dummyv, timeout, stop_soon_p);
-
-    printf("afl-fuzz read from hook success, exec_ms=%d\n", exec_ms);
-    if (exec_ms == 1001) {
-      printf("\n");
-    } else if (exec_ms == 71) {
-      printf("\n");
+    //printf("fuzz read:%d\n",dummyv);
+     if ((int)dummyv == -1) {
+      if (net_protocol == 1) {
+        send_udp_hook();
+      } else {
+        send_tcp_hook();
+      }
     }
+
+
+    //read(recv_pipe[0], check_send, 4);
+    //printf("afl-fuzz read from hook success, exec_ms=%d\n", exec_ms);
+
     // if ((check_send = read(recv_pipe[0], buf, 4)) != 4) {
     //   WARNF("don't recv from hook ");
     // }
@@ -2049,13 +2055,14 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
   }
 
   // zyp
-  if (use_net && !exist_pid(fsrv->child_pid)) { return FSRV_RUN_CRASH; }
+  if (use_net && !exist_pid(fsrv->child_pid)) { 
+      return FSRV_RUN_CRASH; 
+}
 
   // zyp
   // 如果timeout但是child进程没有crash，则重新发起一个新连接send hook即可
-  if (use_net && exec_ms > timeout && !is_new_start && !need_send_pre_packet) {
-    is_new_start = 0;
-    need_send_pre_packet = 1;
+   if (use_net && exec_ms > timeout && !is_new_start) {
+    fsrv->total_execs++;
     return FSRV_RUN_TMOUT;
   }
 

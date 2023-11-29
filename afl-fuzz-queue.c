@@ -583,56 +583,17 @@ static u8 check_if_text(afl_state_t *afl, struct queue_entry *q) {
 
 /* Append new test case to the queue. */
 
-void add_to_queue(afl_state_t *afl, u8 *fname, u32 len, u8 passed_det) { //xzw:这里是进入队列，计算长度的
+void add_to_queue(afl_state_t *afl, u8 *fname, u32 len, u8 passed_det) {
   struct queue_entry *q =
       (struct queue_entry *)ck_alloc(sizeof(struct queue_entry));
 
-  //xzw
-  extern u8 packet_fuzz;
-  extern  u8 is_perform_dry_run;
-  extern u8      pre_cnt,rep_cnt,non_cnt;
-  extern struct queue_entry *testcase_q; 
-  extern struct queue_entry *new_q;
-  if (packet_fuzz && is_perform_dry_run) { 
-      if (testcase_q->pre_num > 0) {
-          q->pre_num=testcase_q->pre_num;
-          q->pre_id = (u8 *)ck_alloc(sizeof(u8) * (q->pre_num));
-          q->pre_id[0] = pre_cnt;
-      } else if (testcase_q->rep_num > 0) {
-          q->rep_num = testcase_q->rep_num;
-          q->rep_id = (u8 *)ck_alloc(sizeof(u8) * (q->rep_num)); //在rep队列中的id
-          q->rep_id[0] = rep_cnt;
-      } else {
-        q->non_num = testcase_q->non_num;
-        q->non_id = (u8 *)ck_alloc(sizeof(u8) * (q->non_num));
-        q->non_id[0] = non_cnt;
-      }
-  } else if (packet_fuzz) { //xzw:此时就是新发现的种子,应该要给对应的元素，并且加入对应队列
-      if (new_q->pre_num > 0) {
-        q->pre_num = new_q->pre_num;
-        q->pre_id = (u8 *)ck_alloc(sizeof(u8) * (q->pre_num));
-        q->pre_id[0] = pre_cnt;
-      } else if (new_q->rep_num > 0) {
-        q->rep_num = new_q->rep_num;
-        q->rep_id =
-            (u8 *)ck_alloc(sizeof(u8) * (q->rep_num));  // 在rep队列中的id
-        q->rep_id[0] = rep_cnt;
-      } else {
-        q->non_num = new_q->non_num;
-        q->non_id = (u8 *)ck_alloc(sizeof(u8) * (q->non_num));
-        q->non_id[0] = non_cnt;
-      }
-
-  }
-    q->fname = fname;
-    q->len = len;
-    q->depth = afl->cur_depth + 1;
-    q->passed_det = passed_det;
-    q->trace_mini = NULL;
-    q->testcase_buf = NULL;
-    q->mother = afl->queue_cur;  
-    // xzw
-    //get_id_by_filename(q);
+  q->fname = fname;
+  q->len = len;
+  q->depth = afl->cur_depth + 1;
+  q->passed_det = passed_det;
+  q->trace_mini = NULL;
+  q->testcase_buf = NULL;
+  q->mother = afl->queue_cur;
 
 #ifdef INTROSPECTION
   q->bitsmap_size = afl->bitsmap_size;
@@ -641,13 +602,10 @@ void add_to_queue(afl_state_t *afl, u8 *fname, u32 len, u8 passed_det) { //xzw:�
   if (q->depth > afl->max_depth) { afl->max_depth = q->depth; }
 
   if (afl->queue_top) {
-
     afl->queue_top = q;
 
   } else {
-
     afl->queue = afl->queue_top = q;
-
   }
 
   if (likely(q->len > 4)) { ++afl->ready_for_splicing_count; }
@@ -668,39 +626,27 @@ void add_to_queue(afl_state_t *afl, u8 *fname, u32 len, u8 passed_det) { //xzw:�
 
   if (likely(afl->start_time) &&
       unlikely(afl->longest_find_time < cur_time - afl->last_find_time)) {
-
     if (unlikely(!afl->last_find_time)) {
-
       afl->longest_find_time = cur_time - afl->start_time;
 
     } else {
-
       afl->longest_find_time = cur_time - afl->last_find_time;
-
     }
-
   }
 
   afl->last_find_time = cur_time;
 
   if (afl->custom_mutators_count) {
-
     /* At the initialization stage, queue_cur is NULL */
     if (afl->queue_cur && !afl->syncing_party) {
-
       run_afl_custom_queue_new_entry(afl, q, fname, afl->queue_cur->fname);
-
     }
-
   }
 
   /* only redqueen currently uses is_ascii */
   if (unlikely(afl->shm.cmplog_mode && !q->is_ascii)) {
-
     q->is_ascii = check_if_text(afl, q);
-
   }
-
 }
 
 /* Destroy the entire queue. */
@@ -708,22 +654,7 @@ void add_to_queue(afl_state_t *afl, u8 *fname, u32 len, u8 passed_det) { //xzw:�
 void destroy_queue(afl_state_t *afl) {
 
   u32 i;
-  extern u8 pre_cnt, rep_cnt, non_cnt;
-  //xzw  释放内存
-  for (int i = 0; i < pre_cnt;i++) {
-    ck_free(pre_q[i]->fname);
-  }
-  for (int i = 0; i < rep_cnt; i++) {
-    ck_free(rep_q[i]->fname);
-  }
-  for (int i = 0; i < non_cnt; i++) {
-    ck_free(non_q[i]->fname);
-  }
-  ck_free(pre_q);
-  ck_free(rep_q);
-  ck_free(non_q);
 
-  //xzw
   for (i = 0; i < afl->queued_items; i++) {
 
     struct queue_entry *q;
@@ -1325,7 +1256,7 @@ inline u8 *get_packet_by_id(u32 id, int queue_size, int queue_type) {
   }
   /* Returns the testcase buf from the file behind this queue entry.
   Increases the refcount. */
-//xzw:通过q去维持一个queue来获取种子
+
 inline u8 *queue_testcase_get(afl_state_t *afl, struct queue_entry *q) {
 
   u32 len = q->len;

@@ -1700,6 +1700,7 @@ void send_udp_hook() {
   close(sockfd);
 }
 // add
+extern u8 isdebug;
 void send_tcp_hook() {
   int  sockfd;
   char buffer[6] = "hook ";
@@ -1723,7 +1724,10 @@ void send_tcp_hook() {
     close(sockfd);
     return 1;
   }
+
+  if (isdebug)
   printf("TCP packet sent to %s:%d\n", net_ip, net_port);
+
   close(sockfd);
 }
 
@@ -1837,6 +1841,8 @@ u8 exist_pid(int pid) {
    information. The called program will update afl->fsrv->trace_bits. */
 //xzw; 如果需要重新连接即send_tcp_hook，我们需要重新发送pre包
 u8 need_send_pre_packet = 0;
+extern u8 dis_connect;
+extern u8 isdebug;
 fsrv_run_result_t __attribute__((hot))
 afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
                     volatile u8 *stop_soon_p) {
@@ -1988,7 +1994,6 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
     } else {
       send_tcp_hook();
     }
-
     // add connection
     // send hook
   }
@@ -2017,18 +2022,26 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
     if ((check_send = write(send_pipe[1], "HALO", 4)) < 0) {
       WARNF("Unable to write ");
     }
+    if (isdebug) { printf("Write Hello to hook\n"); }
     //exec_ms = 1;
     // 改为处理完当前种子hook端再向fuzzer发消息，因此这里同样需要等待完成
     u32 dummyv = 0;
+
     exec_ms = read_s32_timed(recv_pipe[0], &dummyv, timeout, stop_soon_p);
-    //printf("fuzz read:%d\n",dummyv);
-     if ((int)dummyv == -1) {
-      if (net_protocol == 1) {
-        send_udp_hook();
-      } else {
-        send_tcp_hook();
-      }
+
+    if (isdebug)
+    printf("fuzz read:%d\n",dummyv);
+
+    if ((int)dummyv == -1) {
+        if (net_protocol == 1) {
+          send_udp_hook();
+        } else {
+          send_tcp_hook();
+        }
     }
+  
+
+
 
 
     //read(recv_pipe[0], check_send, 4);
@@ -2081,6 +2094,8 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
       }
 
       fsrv->last_run_timed_out = 1;
+
+
       if (read(fsrv->fsrv_st_fd, &fsrv->child_status, 4) < 4) { exec_ms = 0; }
     }
   }

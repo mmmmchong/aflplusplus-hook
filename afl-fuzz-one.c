@@ -475,7 +475,7 @@ u8 fuzz_one_original(afl_state_t *afl) {
   /************
    * TRIMMING *
    ************/
-  afl->disable_trim = 1;  //xzw:disable trim
+ // afl->disable_trim = 1;  //xzw:disable trim
 
 
   if (unlikely(!afl->non_instrumented_mode && !afl->queue_cur->trim_done &&

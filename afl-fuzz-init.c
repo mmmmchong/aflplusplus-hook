@@ -830,7 +830,7 @@ void read_testcases(afl_state_t * afl, u8 * directory) {
     afl->queued_at_start = afl->queued_items;
   }
 
-void copy_queue_entry_fields(struct queue_entry *dest,
+/*void copy_queue_entry_fields(struct queue_entry *dest,
                              struct queue_entry *src) {
   dest->pre_num = src->pre_num;
   dest->rep_num = src->rep_num;
@@ -849,7 +849,7 @@ void copy_queue_entry_fields(struct queue_entry *dest,
   memcpy(dest->non_id, src->non_id, src->non_num);
 
   dest->fname = ck_strdup(src->fname);  
-}
+}*/
 
 //xzw
 static u32 __attribute__((hot))
@@ -917,7 +917,7 @@ restart_select:
 extern int send_pipe[2];
 extern int recv_pipe[2];
 
-void write_to_num_file(afl_state_t *afl, struct queue_entry *q) {
+/* void write_to_num_file(afl_state_t *afl, struct queue_entry *q) {
   // xzw
   u8 *num_filename;
   u8        *num_file_buf;
@@ -936,7 +936,7 @@ void write_to_num_file(afl_state_t *afl, struct queue_entry *q) {
       PFATAL("Open num_file failed");
   }
 
-  if (q->pre_num > 0) {
+   if (q->pre_num > 0) {
       strcat((char *)num_file_buf, "p ");
 
       for (int i = 0; i < q->pre_num; i++) {
@@ -984,7 +984,7 @@ void write_to_num_file(afl_state_t *afl, struct queue_entry *q) {
 
         ck_free(num_file_buf);
     }//xzw:TODO写完向num_file填充的函数，需要注意的是，格式为p %d %d %d r.....
-
+*/
 /* Perform dry run of all test cases to confirm that the app is working as
    expected. This is done only for the initial inputs, and only once. */
 

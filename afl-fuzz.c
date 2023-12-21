@@ -529,8 +529,9 @@ int main(int argc, char **argv_orig, char **envp) {
   afl->shmem_testcase_mode = 1;  // we always try to perform shmem fuzzing
 
   // still available: HjJkKqruvwz //世界上还是好人多
+
   while ((opt = getopt(argc, argv,
-                       "+a:Ab:B:c:CdDe:E:f:F:g:G:hH:i:I:l:L:m:M:nNo:Op:P:QRs:S:t:"
+                       "+a:Ab:B:c:CdDe:E:f:F:g:G:hH:i:I:l:L:m:M:nNo:Op:P:QRrs:S:t:"
                        "T:UV:WXx:YZ")) > 0) {
 
     switch (opt) {
@@ -541,6 +542,7 @@ int main(int argc, char **argv_orig, char **envp) {
           FATAL("Bad syntax used for -H");
         }
         break;
+ 
 
       case 'a':
 

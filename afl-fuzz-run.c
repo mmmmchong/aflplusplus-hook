@@ -44,12 +44,83 @@ u64 time_spent_working = 0;
 u32 test_bitmap_size;
 u8  is_new_start = 1;
 // xzw add for ewma
-double ewma_alpha = 0.30;  // alpha值
-double ewma_avg = 10.00;   // EWMA值
+double ewma_alpha = 0.20;  // alpha值
+double ewma_avg = 100.00;   // EWMA值
 double threshold = 10.00;  // 阈值
 double first_bitmap = 0.0;
 u8    first_state = 1;
+u32     kill_time = 0;
+u8     dis_connect = 0;
+extern int send_pipe[1];
+extern int recv_pipe[1];
+extern u8 net_protocol; 
 
+static u32 __attribute__((hot))
+read_s32_timed(s32 fd, s32 *buf, u32 timeout_ms, volatile u8 *stop_soon_p) {
+  fd_set readfds;
+  FD_ZERO(&readfds);
+  FD_SET(fd, &readfds);
+  struct timeval timeout;
+  int            sret;
+  ssize_t        len_read;
+
+  timeout.tv_sec = (timeout_ms / 1000);
+  timeout.tv_usec = (timeout_ms % 1000) * 1000;
+#if !defined(__linux__)
+  u32 read_start = get_cur_time_us();
+#endif
+
+  /* set exceptfds as well to return when a child exited/closed the pipe. */
+restart_select:
+  sret = select(fd + 1, &readfds, NULL, NULL, &timeout);
+
+  if (likely(sret > 0)) {
+  restart_read:
+    if (*stop_soon_p) {
+      // Early return - the user wants to quit.
+      return 0;
+    }
+
+    len_read = read(fd, (u8 *)buf, 4);
+    // xzw:
+    // printf("read from hook success\n");
+
+    if (likely(len_read == 4)) {  // for speed we put this first
+
+#if defined(__linux__)
+      u32 exec_ms = MIN(
+          timeout_ms,
+          ((u64)timeout_ms - (timeout.tv_sec * 1000 + timeout.tv_usec / 1000)));
+#else
+      u32 exec_ms = MIN(timeout_ms, (get_cur_time_us() - read_start) / 1000);
+#endif
+
+      // ensure to report 1 ms has passed (0 is an error)
+      return exec_ms > 0 ? exec_ms : 1;
+
+    } else if (unlikely(len_read == -1 && errno == EINTR)) {
+      goto restart_read;
+
+    } else if (unlikely(len_read < 4)) {
+      return 0;
+    }
+
+  } else if (unlikely(!sret)) {
+    *buf = -1;
+    return timeout_ms + 1;
+
+  } else if (unlikely(sret < 0)) {
+    if (likely(errno == EINTR)) goto restart_select;
+
+    *buf = -1;
+    return 0;
+  }
+
+  return 0;  // not reached
+}
+
+u32 check_times = 0;
+u8  isdebug = 0;
     fsrv_run_result_t __attribute__((hot))
 fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
 
@@ -67,36 +138,74 @@ fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
 
 #endif
   u32    max_bitsize = 0;
-  /* extern u8 pre_cnt;
-  if (is_new_start) {
-    u8 *mem = get_packet_by_id(0, pre_cnt, 0);
-    afl_fsrv_write_to_testcase(fsrv, mem, pre_q[0]->len);
-    ck_free(mem);
-  }*/
-
-
-  
- if (ewma_avg < 10.0) {
-    kill(fsrv->child_pid, 0);
-    ewma_avg = first_bitmap;
-  }
-
       fsrv_run_result_t res =
           afl_fsrv_run_target(fsrv, timeout, &afl->stop_soon);
       //add
  test_bitmap_size = count_bytes(afl, afl->fsrv.trace_bits);
 
+//xzw added to check state
+//We check the state of the PUT by replaying the seeds that previously triggered new code coverage,
+//and if some of them still retain the original bitmap (or perform well), We believe that the test environment is not contaminated.
+ u32 valid_count = 0;
+ 
+ if (afl->debug) { isdebug = 1; }
 
-
-
- if (first_state) { 
+  if (first_state) { 
      first_bitmap = (double)test_bitmap_size;
     ewma_avg = ewma(first_bitmap, (double)test_bitmap_size, ewma_alpha);
     first_state = 0;
  } else {
      ewma_avg = ewma(ewma_avg, (double)test_bitmap_size, ewma_alpha);
  }
-  //printf("bitmap_size:%u\n", test_bitmap_size);
+
+ if (ewma_avg < 3.1) {  // need to check state
+     //check_times++;
+     u32 entry;
+
+     for (entry = 0; entry < afl->queued_items; ++entry) {
+      if (!afl->queue_buf[entry]->disabled &&
+          afl->queue_buf[entry]->has_new_cov &&
+          afl->queue_buf[entry]->bitmap_size>0) {
+       // printf("bitmap of seed entry[%lu]:%lu\n", entry,
+         //      afl->queue_buf[entry]->bitmap_size);
+
+        u8 *in_buf;
+        u32 len = afl->queue_buf[entry]->len;
+
+        in_buf = queue_testcase_get(afl, afl->queue_buf[entry]);
+
+        write_to_testcase(afl, &in_buf, len, 0);
+
+        fsrv_run_result_t res =
+            afl_fsrv_run_target(fsrv, timeout, &afl->stop_soon);
+        // add
+        test_bitmap_size = count_bytes(afl, afl->fsrv.trace_bits);
+
+        //printf("bitmap of reput seed entry[%lu]:%lu\n", entry,
+       //        test_bitmap_size);
+      }
+      if (test_bitmap_size == afl->queue_buf[entry]->bitmap_size) {
+        valid_count++;
+      }
+     }
+
+     if (valid_count > check_times) {
+      // The reward ewma_avg to ensure that there is no need for
+      // testing for the next period of time
+
+      ewma_avg = 100.0;
+
+     } else {
+      kill(fsrv->child_pid, 0);
+      if (afl->debug)
+      printf("killed time:%lu\n", ++kill_time);
+      check_times = 0;
+      ewma_avg = 100.0;
+     }
+ } 
+
+ if (afl->debug)
+     printf("bitmap_size:%u\n", test_bitmap_size);
 
   //add
   //xzw
@@ -121,10 +230,10 @@ fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
    rewound and truncated. */
 //xzw:mem就是包的buffer
 u8  *num_filename;  // zyp
-u32 __attribute__((hot))
-write_to_testcase(afl_state_t *afl, void **mem, u32 len, u32 fix) { 
-    //xzw TODO:这里应该要用算法来抓取合适的包并且组成一个种子，抓取的包应该由强化学习exp3来决定
-    //
+
+u32 __attribute__((hot)) 
+write_to_testcase(afl_state_t * afl, void **mem, u32 len, u32 fix){ 
+
   u8 sent = 0;
 
   
@@ -300,27 +409,6 @@ write_to_testcase(afl_state_t *afl, void **mem, u32 len, u32 fix) {
   }
 
 #endif
-  // zyp
-  // 要写入的8字节整数
-  /* static int64_t value = 0;
-
-  // 打开文件
-  FILE *file = fopen(num_filename, "wb");
-  if (file == NULL) {
-    perror("Failed to open file");
-    return;
-  }
-
-  // 写入8字节整数
-  size_t bytesWritten = fwrite(&value, sizeof(value), 1, file);
-  if (bytesWritten != 1) {
-    perror("Failed to write to file");
-    fclose(file);
-    return;
-  }
-
-  // 关闭文件
-  fclose(file);*/
   return len;
 
 }
@@ -961,6 +1049,7 @@ void sync_fuzzers(afl_state_t *afl) {
 
 }
 
+
 /* Trim all new test cases to save cycles when doing deterministic checks. The
    trimmer uses power-of-two increments somewhere between 1/16 and 1/1024 of
    file size, to keep the stage short and sweet. */
@@ -1213,4 +1302,15 @@ common_fuzz_stuff(afl_state_t *afl, u8 *out_buf, u32 len) {
 //xzw add for ewma
 double ewma(double prev_avg, double value, double alpha) {
   return alpha * value + (1 - alpha) * prev_avg;
+}
+
+u8 check_state(afl_state_t* afl,double bitmap,double threadhold) {
+  u32 entry;
+  for (entry = 0; entry < afl->queued_items; ++entry)
+    if (!afl->queue_buf[entry]->disabled) { 
+    printf("bitmap of seed entry[%lu]:%lu\n", entry,
+             afl->queue_buf[entry]->bitmap_size);
+    
+    }
+
 }

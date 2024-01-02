@@ -21,7 +21,7 @@
 #include <netinet/ip.h>
 #include <netinet/ip_icmp.h>
 #include <sys/epoll.h>
-
+#include <errno.h>
 
 typedef uint8_t  u8;
 typedef uint16_t u16;
@@ -36,8 +36,11 @@ typedef uint32_t u32;
 #define HOOK_STRING "hook"
 #define FINIREAD "1111"
 
-char *        FILENAME = "mqtt_finding_dir/default/.cur_input";
-char *        NUM_FILENAME = "mqtt_finding_dir/default/.num_cur_input";
+//char *        FILENAME = "/mnt/c/Users/muchong/Desktop/AFLplusplus-stable/visualstudio/aflplusplus/aflplusplus/bin/x64/Debug/exim_finding_dir/default/.cur_input";
+//char *        NUM_FILENAME = "/mnt/c/Users/muchong/Desktop/AFLplusplus-stable/visualstudio/aflplusplus/aflplusplus/bin/x64/Debug/exim_finding_dir/default/.num_cur_input";
+char *FILENAME = NULL;
+char *NUM_FILENAME = NULL;
+
 
 timer_t       timerid;
 static int    flag_recvmsg = 0;
@@ -70,6 +73,36 @@ void          printHex(const char *buf, int len) {
   }
   printf("\n");
 }
+
+
+__attribute__((constructor)) void hook_init() {
+  const char *output_file = getenv("OUTPUT_FILE");
+  if (output_file) {
+
+    size_t filename_size = strlen(output_file) + strlen("/default/.cur_input") + 1;
+    size_t numfilename_size =
+        strlen(output_file) + strlen("/default/.num_cur_input") + 1;
+
+    FILENAME = malloc(filename_size);
+    NUM_FILENAME = malloc(numfilename_size);
+    if (FILENAME && NUM_FILENAME) {
+      snprintf(FILENAME, filename_size, "%s/default/.cur_input", output_file);
+      snprintf(NUM_FILENAME, numfilename_size, "%s/default/.num_cur_input", output_file);
+    } else {
+      fprintf(stderr, "Error: Memory allocation failed.\n");
+    }
+  } else {
+    fprintf(stderr, "Error: OUTPUT_FILE environment variable not set.\n");
+    exit(-1);
+  }
+
+  printf("set output file %s", output_file);
+
+}
+
+
+
+
 
 // 1表示需要，0表示不需要
 int need_reopen_input() {
@@ -129,7 +162,8 @@ int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event) {
 
 typedef ssize_t (*orig_recv_func_type)(int sockfd, void *buf, size_t len, int flags);
 orig_recv_func_type original_recv = NULL;
-ssize_t   recv(int sockfd, void *buf, size_t len, int flags) {
+ssize_t __attribute__((hot))
+recv(int sockfd, void *buf, size_t len, int flags) {
   if (!original_recv) {
     original_recv = (orig_recv_func_type)dlsym(RTLD_NEXT, "recv");
   }
@@ -155,9 +189,11 @@ ssize_t   recv(int sockfd, void *buf, size_t len, int flags) {
 
  if (flag_recv == 1) {  //&& fd == hook_fd
 
+
     int needread = 0;
 
     if (first_read) {
+
       read_from_afl();  // 第一次需要从afl收到hook
       first_read = 0;
       // need_reopen_input();    //第一次直接读，更新一下 last_num_cur_input
@@ -171,6 +207,25 @@ ssize_t   recv(int sockfd, void *buf, size_t len, int flags) {
 
     if (seed_length > 0) {
       int   count = 0;
+
+        if (access(NUM_FILENAME, F_OK) == -1) {
+        perror("Error");
+        //return 1;
+      } else {
+        printf("File exists.\n");
+      }
+
+      // 检查读取权限
+      if (access(NUM_FILENAME, R_OK) == -1) {
+        perror("Error");
+        //return 1;
+      } else {
+        printf("Read permission granted.\n");
+      }
+
+
+
+
       FILE *num_file = fopen(NUM_FILENAME, "rb");
       if (!num_file) { perror("Open num_file for read failed"); }
       if (fread(&count, sizeof(count), 1, num_file) != 1) {
@@ -191,6 +246,26 @@ ssize_t   recv(int sockfd, void *buf, size_t len, int flags) {
     if (needread) {
       //printf("hook read numfile\n");
 
+
+
+          if (access(FILENAME, F_OK) == -1) {
+        perror("Error");
+        return 1;
+      } else {
+        printf("File exists.\n");
+      }
+
+      // 检查读取权限
+      if (access(FILENAME, R_OK) == -1) {
+        perror("Error");
+        return 1;
+      } else {
+        printf("Read permission granted.\n");
+      }
+
+
+
+
       fp = fopen(FILENAME, "rb");
 
       FILE *num_file = fopen(NUM_FILENAME, "r");
@@ -199,9 +274,16 @@ ssize_t   recv(int sockfd, void *buf, size_t len, int flags) {
       if (fread(&seed_length, sizeof(seed_length), 1, num_file) != 1) {
         perror("wrong in read");
       }
+      if ((int)seed_length == -1) {
+        printf("need to disconnect\n");
+        flag_recv = 0;
+        send_to_afl();
+        return original_recv(sockfd, buf, 4, flags);
+      }
+
       fclose(num_file);
       num_file = NULL;
-     // printf("seed_length:%d\n", seed_length);
+     printf("seed_length:%d\n", seed_length);
 
       orig_seed_length = seed_length;
 
@@ -253,10 +335,10 @@ ssize_t   recv(int sockfd, void *buf, size_t len, int flags) {
       seed_length -= (int)len;
     }
 
-    if (len > 8096) { 
+    /* if (len > 8096) { 
     error_packet = 1; 
     //exit(2);
-    }
+    }*/
 
     //printf("seed_length:%d\n", seed_length);
 
@@ -275,7 +357,8 @@ ssize_t   recv(int sockfd, void *buf, size_t len, int flags) {
 typedef ssize_t (*recvfrom_t)(int sockfd, void *buf, size_t len, int flags,
                               struct sockaddr *src_addr, socklen_t *addrlen);
 static recvfrom_t original_recvfrom = NULL;
-ssize_t           recvfrom(int sockfd, void *buf, size_t len, int flags,
+ssize_t __attribute__((hot))
+recvfrom(int sockfd, void *buf, size_t len, int flags,
                            struct sockaddr *src_addr, socklen_t *addrlen) {
   if (!original_recvfrom) { original_recvfrom = dlsym(RTLD_NEXT, "recvfrom"); }
 
@@ -423,7 +506,7 @@ ssize_t           recvfrom(int sockfd, void *buf, size_t len, int flags,
 }
 typedef ssize_t (*orig_read_func_type)(int sockfd, void *buf, size_t count);
 static orig_read_func_type original_read = NULL;
-ssize_t   read(int fd, void *buf, size_t count) {
+ssize_t __attribute__((hot)) read(int fd, void *buf, size_t count) {
   // printf("read called here\n");
   if (!original_read) {
     original_read = (orig_read_func_type)dlsym(RTLD_NEXT, "read");
@@ -469,6 +552,36 @@ ssize_t   read(int fd, void *buf, size_t count) {
 
     if (seed_length > 0) {
       int   len = 0;
+      //printf("%s\n", NUM_FILENAME);
+
+
+
+      
+                if (access(NUM_FILENAME, F_OK) == -1) {
+        perror("Error");
+        //return 1;
+      } else {
+        printf("File exists.\n");
+      }
+
+      // 检查读取权限
+      if (access(NUM_FILENAME, R_OK) == -1) {
+        perror("Error");
+        //return 1;
+      } else {
+        printf("Read permission granted.\n");
+      }
+
+
+
+
+
+
+
+
+
+
+
       FILE *num_file = fopen(NUM_FILENAME, "rb");
       if (!num_file) { perror("Open num_file for read failed"); }
       if (fread(&len, sizeof(len), 1, num_file) != 1) {
@@ -493,6 +606,34 @@ ssize_t   read(int fd, void *buf, size_t count) {
 
     if (needread) {
       printf("hook read numfile\n");
+      //printf("%s\n", FILENAME);
+
+
+
+
+              if (access(FILENAME, F_OK) == -1) {
+          perror("Error");
+          //return 1;
+      } else {
+          printf("File exists.\n");
+      }
+
+      // 检查读取权限
+      if (access(FILENAME, R_OK) == -1) {
+          perror("Error");
+         // return 1;
+      } else {
+          printf("Read permission granted.\n");
+      }
+
+
+
+
+
+
+
+
+
 
       fp = fopen(FILENAME, "rb");
       if (!fp) { perror("Open file for read failed"); }
@@ -505,6 +646,15 @@ ssize_t   read(int fd, void *buf, size_t count) {
       }
       fclose(num_file);
       printf("seed_length:%d\n", seed_length);
+
+       if ((int)seed_length == -1) {
+          printf("need to disconnect\n");
+          flag_read = 0;
+          send_to_afl();
+          return original_read(fd, buf, count);
+      }
+
+
 
       orig_seed_length = seed_length;
 
@@ -777,10 +927,25 @@ void read_from_afl() {
   }
   char buf[4];
   int  res = 0;
-  if ((res = original_read(FORKSRV_FD + 3, buf, 4)) < 0) {
+  int  bytesRead;
+   if ((res = original_read(FORKSRV_FD + 3, buf, 4)) < 0) {
     perror("Don't recv hello?(OOM?)read_from_afl:");
     //_exit(1);
   }
+
+    fcntl(FORKSRV_FD + 3, F_SETFL, O_NONBLOCK);
+
+    while (1) {
+    bytesRead = read(FORKSRV_FD + 3, buf, 1);
+    if (bytesRead < 0) { 
+        int flags = fcntl(FORKSRV_FD + 3, F_GETFL);
+      fcntl(FORKSRV_FD + 3, F_SETFL, flags & ~O_NONBLOCK);
+        break;
+    }
+
+    }
+
+
    printf("read from afl success fd:%d\n",FORKSRV_FD+3);
 }
 int close(int fd) {

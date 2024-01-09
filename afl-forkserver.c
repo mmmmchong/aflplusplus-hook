@@ -2043,14 +2043,14 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
     if (isdebug)
     printf("fuzz read:%d\n",dummyv);
 
-    if ((int)dummyv == -1) {
-      build_connect = 1;
-        if (net_protocol == 1) {
-          send_udp_hook();
-        } else {
-          send_tcp_hook();
-        }
-    }
+     if ((int)dummyv == -1 || (int)dummyv == 842150450) {
+      if ((int)dummyv == 842150450 && isdebug) printf("\nfuzz recv disconnect\n");
+      if (net_protocol == 1) {
+        send_udp_hook();
+      } else {
+        send_tcp_hook();
+      }
+    } 
   
 
 

@@ -35,6 +35,7 @@ typedef uint32_t u32;
 #define MAX_PACKET_NUM 1024
 #define HOOK_STRING "hook"
 #define FINIREAD "1111"
+#define FD_CLOSED "2222"
 
 //char *        FILENAME = "/mnt/c/Users/muchong/Desktop/AFLplusplus-stable/visualstudio/aflplusplus/aflplusplus/bin/x64/Debug/exim_finding_dir/default/.cur_input";
 //char *        NUM_FILENAME = "/mnt/c/Users/muchong/Desktop/AFLplusplus-stable/visualstudio/aflplusplus/aflplusplus/bin/x64/Debug/exim_finding_dir/default/.num_cur_input";
@@ -48,6 +49,7 @@ static int    flag_recvfrom = 0;
 static int    flag_read = 0;
 static int    flag_recv = 0;
 static int    first_read = 1;
+int           srv_fd = 0;
 
 int           hook_fd;                           // 需要hook的fd
 int64_t       last_num_cur_input = 0;
@@ -948,12 +950,50 @@ void read_from_afl() {
 
    printf("read from afl success fd:%d\n",FORKSRV_FD+3);
 }
-int close(int fd) {
-  if (fd == FORKSRV_FD + 3 || fd == FORKSRV_FD + 4) { return 0; }
-  int (*original_close)(int);
-  original_close = dlsym(RTLD_NEXT, "close");
-  return original_close(fd);
+
+typedef int (*orig_accept_type)(int, struct sockaddr *, socklen_t *);
+
+orig_accept_type orig_accept;
+
+int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
+   if (!orig_accept) {
+    orig_accept = (orig_accept_type)dlsym(RTLD_NEXT, "accept");
+   }
+
+   // printf("accept hererererer\n");
+
+   printf("sockfd:%d\n", sockfd);
+
+    srv_fd = orig_accept(sockfd, addr, addrlen);
+
+
+   if (srv_fd >= 0) {
+    printf("accept successful fd: %d\n", srv_fd);
+   } else {
+    perror("accept failed\n");
+   }
+
+   return srv_fd;
 }
+
+int close(int fd) {
+   if (fd == FORKSRV_FD + 3 || fd == FORKSRV_FD + 4) { return 0; }
+   int (*original_close)(int);
+   original_close = dlsym(RTLD_NEXT, "close");
+
+   if (fd == srv_fd) {
+    printf("at close\n");
+    srv_fd = 0;
+    printf("send to afl success  fd:%d,data:%d\n", FORKSRV_FD + 4, FD_CLOSED);
+    if (write(FORKSRV_FD + 4, FD_CLOSED, 4) < 0) {
+        perror("wrong in writing to afl-fuzz ");
+        //_exit(1);
+    }
+   }
+
+   return original_close(fd);
+}
+
 int is_valid_socket(int fd) {
   // 使用 F_GETFL 标志获取文件描述符状态
   int flags = fcntl(fd, F_GETFL);
@@ -972,4 +1012,24 @@ void set_manual_cliaddr(struct sockaddr_in * cliaddr) {
     cliaddr->sin_port = htons(10000);  // Client's port number, change if needed
     inet_pton(AF_INET, "127.0.0.1",
               &(cliaddr->sin_addr));  // Client's IP address
+}
+
+int (*original_dup)(int) = NULL;
+
+int dup(int fd) {
+
+    if (!original_dup) { original_dup = dlsym(RTLD_NEXT, "dup"); }
+
+
+    if (fd == srv_fd ) {
+
+    int new_fd=original_dup(fd);
+
+        printf("dup!: %d->%d\n", fd, new_fd);
+
+        srv_fd = new_fd;
+
+    return new_fd;
+    }
+
 }

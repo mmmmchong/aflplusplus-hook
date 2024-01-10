@@ -1021,7 +1021,7 @@ int dup(int fd) {
     if (!original_dup) { original_dup = dlsym(RTLD_NEXT, "dup"); }
 
 
-    if (fd == srv_fd ) {
+    if (fd == srv_fd && srv_fd>0) {
 
     int new_fd=original_dup(fd);
 
@@ -1030,6 +1030,48 @@ int dup(int fd) {
         srv_fd = new_fd;
 
     return new_fd;
+    } else {
+    return original_dup(fd);
     }
 
 }
+
+int (*original_dup2)(int,int) = NULL;
+   int dup2(int oldfd, int newfd) {
+    if (!original_dup2) { original_dup2 = dlsym(RTLD_NEXT, "dup2"); }
+
+    if (oldfd == srv_fd && srv_fd > 0) { 
+
+        int new = original_dup2(oldfd, newfd);
+
+         printf("dup!: %d->%d\n", oldfd, new);
+
+
+    if (new > 0)
+        srv_fd = new;
+    else
+        return new;
+    } else {
+    return original_dup2(oldfd, newfd);
+    ;
+    }
+   }
+
+int (*original_dup3)(int, int,int) = NULL;
+int dup3(int oldfd, int newfd, int flags) {
+    if (!original_dup3) { original_dup3 = dlsym(RTLD_NEXT, "dup3"); }
+    if (oldfd == srv_fd && srv_fd > 0) {
+    int new = original_dup3(oldfd, newfd,flags);
+
+    printf("dup!: %d->%d\n", oldfd, new);
+
+    if (new > 0)
+        srv_fd = new;
+    else
+        return new;
+    } else {
+    return original_dup3(oldfd, newfd, flags);
+    
+    }
+
+   }

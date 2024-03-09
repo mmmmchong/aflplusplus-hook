@@ -466,6 +466,7 @@ static void fasan_check_afl_preload(char *afl_preload) {
 
 // 解释和定义在afl-forkserver.c
 extern u8  use_net;
+extern u8  ewma_enabled;
 extern u8  net_protocol;
 extern u32 net_port;
 extern u32 reconnect_num;
@@ -532,10 +533,14 @@ int main(int argc, char **argv_orig, char **envp) {
 
   while ((opt = getopt(argc, argv,
                        "+a:Ab:B:c:CdDe:E:f:F:g:G:hH:i:I:l:L:m:M:nNo:Op:P:QRrs:S:t:"
-                       "T:UV:WXx:YZ")) > 0) {
+                       "T:UV:WXx:YZz")) > 0) {
 
     switch (opt) {
         //add
+      case 'z':
+        ewma_enabled = 1;
+        break;
+
       case 'H':
         use_net = 1;
         if (sscanf(optarg, "%hhu:%u", &net_protocol, &net_port) != 2) {

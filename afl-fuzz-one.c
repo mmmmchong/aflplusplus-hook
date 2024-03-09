@@ -422,11 +422,7 @@ u8 fuzz_one_original(afl_state_t *afl) {
   }
   //xzw:通过queue_testcase_get来获取in_buf
   //这里插入exp3来获取包
-  //xzw
-  extern u8 packet_fuzz;
-  extern u8 pre_cnt;
-  extern u8 rep_cnt;
-  extern u8 non_cnt;
+
 
 
   orig_in = in_buf =  queue_testcase_get(afl, afl->queue_cur);  // get testcase
@@ -475,7 +471,7 @@ u8 fuzz_one_original(afl_state_t *afl) {
   /************
    * TRIMMING *
    ************/
- // afl->disable_trim = 1;  //xzw:disable trim
+  afl->disable_trim = 1;  //xzw:disable trim
 
 
   if (unlikely(!afl->non_instrumented_mode && !afl->queue_cur->trim_done &&

@@ -627,7 +627,7 @@ save_if_interesting(afl_state_t *afl, void *mem, u32 len, u8 fault) {
        successful. */
 
       //xzw:不要calibration
-    res = calibrate_case(afl, afl->queue_top, mem, afl->queue_cycle - 1, 0);
+    //res = calibrate_case(afl, afl->queue_top, mem, afl->queue_cycle - 1, 0);
     res = FSRV_RUN_OK;
       if (unlikely(res == FSRV_RUN_ERROR)) {
         FATAL("Unable to execute target application");

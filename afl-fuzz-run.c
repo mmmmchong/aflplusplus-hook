@@ -121,6 +121,10 @@ restart_select:
 
 u32 check_times = 0;
 u8  isdebug = 0;
+extern u8* num_filename;
+u8         have_disconnected = 0;
+u8         ewma_enabled = 0;
+
     fsrv_run_result_t __attribute__((hot))
 fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
 
@@ -145,75 +149,150 @@ fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
 
 //xzw added to check state
 //We check the state of the PUT by replaying the seeds that previously triggered new code coverage,
-//and if some of them still retain the original bitmap (or perform well), We believe that the test environment is not contaminated.
+//and if some of them still retain the original bitmap (or perform well), We believe that the test environment is not contaminated. 
+// xzw:服务器的状态可能被污染了，发送一个len=0的包试图断开连接，
+ // 如果无法断开连接，或者断开之后发现服务器仍然被污染了，那么kill服务器
+
+ 
+
  u32 valid_count = 0;
  
  if (afl->debug) { isdebug = 1; }
+ if (ewma_enabled) {
+    if (first_state) {
+      first_bitmap = (double)test_bitmap_size;
+      ewma_avg = ewma(first_bitmap, (double)test_bitmap_size, ewma_alpha);
+      first_state = 0;
+    } else {
+      ewma_avg = ewma(ewma_avg, (double)test_bitmap_size, ewma_alpha);
+    }
 
-  if (first_state) { 
-     first_bitmap = (double)test_bitmap_size;
-    ewma_avg = ewma(first_bitmap, (double)test_bitmap_size, ewma_alpha);
-    first_state = 0;
- } else {
-     ewma_avg = ewma(ewma_avg, (double)test_bitmap_size, ewma_alpha);
+    if (ewma_avg < 3.1) {  // need to check state
+      check_times++;
+      u32 entry;
+
+      // xzw:写入特殊的长度-1
+
+      /* fsrv_run_result_t tmp =
+          afl_fsrv_run_target(fsrv, timeout, &afl->stop_soon);
+         //xzw:无所谓运行与否，为了让hook察觉到-1
+        */
+
+      for (entry = 0; entry < afl->queued_items; ++entry) {
+        if (!afl->queue_buf[entry]->disabled &&
+            afl->queue_buf[entry]->has_new_cov &&
+            afl->queue_buf[entry]->bitmap_size > 0) {
+          // printf("bitmap of seed entry[%lu]:%lu\n", entry,
+          //      afl->queue_buf[entry]->bitmap_size);
+
+          u8 *in_buf;
+          u32 len = afl->queue_buf[entry]->len;
+
+          in_buf = queue_testcase_get(afl, afl->queue_buf[entry]);
+
+          write_to_testcase(afl, &in_buf, len, 0);
+
+          fsrv_run_result_t res =
+              afl_fsrv_run_target(fsrv, timeout, &afl->stop_soon);
+          // add
+          test_bitmap_size = count_bytes(afl, afl->fsrv.trace_bits);
+
+          // printf("bitmap of reput seed entry[%lu]:%lu\n", entry,
+          //        test_bitmap_size);
+        }
+        if (test_bitmap_size >= afl->queue_buf[entry]->bitmap_size) {
+          valid_count++;
+        }
+      }
+
+      if (valid_count > check_times) {
+        // The reward ewma_avg to ensure that there is no need for
+        // testing for the next period of time
+
+        ewma_avg = 100.0;
+
+      } else {
+        if (!have_disconnected) {
+
+          if (unlikely(!afl->fsrv.use_shmem_fuzz)) {
+
+            num_filename = alloc_printf("%s/.num_cur_input", afl->out_dir);
+            u8 *num_buf;
+
+            int num_fd = open(num_filename, O_RDWR | O_TRUNC | O_CREAT,
+                              DEFAULT_PERMISSION);
+
+            if (num_fd < 0) { FATAL("Open num_file failed"); }
+
+            int disconnect_val = -1;
+
+            ssize_t bytes_written =
+                write(num_fd, &disconnect_val, sizeof(disconnect_val));
+
+            if (bytes_written < 0) {
+              perror("Failed to write special value to file");
+            } else {
+              if (isdebug) printf("Successfully wrote special value to file\n");
+            }
+
+            ck_free(num_filename);
+            close(num_fd);
+          } else {
+
+              int len = -1;
+            memcpy(fsrv->shmem_fuzz, &len, sizeof(len));
+          
+          }
+
+          int  check_send;
+          char buf[4];
+
+          if ((check_send = write(send_pipe[1], "HALO", 4)) < 0) {
+            WARNF("Unable to write ");
+          }
+
+          if (net_protocol) {
+            send_udp_hook();
+          } else {
+            send_tcp_hook();
+          }
+
+          ewma_avg = 100.0;
+
+          have_disconnected = 1;
+
+        } else {
+          kill(fsrv->child_pid, 0);
+          // if (afl->debug)
+          printf("killed time:%lu\n", ++kill_time);
+          check_times = 0;
+          ewma_avg = 100.0;
+          have_disconnected = 0;
+        }
+      }
+    }
  }
 
- if (ewma_avg < 3.1) {  // need to check state
-     //check_times++;
-     u32 entry;
 
-     for (entry = 0; entry < afl->queued_items; ++entry) {
-      if (!afl->queue_buf[entry]->disabled &&
-          afl->queue_buf[entry]->has_new_cov &&
-          afl->queue_buf[entry]->bitmap_size>0) {
-       // printf("bitmap of seed entry[%lu]:%lu\n", entry,
-         //      afl->queue_buf[entry]->bitmap_size);
-
-        u8 *in_buf;
-        u32 len = afl->queue_buf[entry]->len;
-
-        in_buf = queue_testcase_get(afl, afl->queue_buf[entry]);
-
-        write_to_testcase(afl, &in_buf, len, 0);
-
-        fsrv_run_result_t res =
-            afl_fsrv_run_target(fsrv, timeout, &afl->stop_soon);
-        // add
-        test_bitmap_size = count_bytes(afl, afl->fsrv.trace_bits);
-
-        //printf("bitmap of reput seed entry[%lu]:%lu\n", entry,
-       //        test_bitmap_size);
-      }
-      if (test_bitmap_size == afl->queue_buf[entry]->bitmap_size) {
-        valid_count++;
-      }
-     }
-
-     if (valid_count > check_times) {
-      // The reward ewma_avg to ensure that there is no need for
-      // testing for the next period of time
-
-      ewma_avg = 100.0;
-
-     } else {
+ if (fsrv->total_execs % 100 == 0) {
+    u32 udp_num = count_connections(fsrv, 1);
+    u32 tcp_num = count_connections(fsrv, 0);
+    if (isdebug)
+    printf(" total num : % d \n", udp_num + tcp_num);
+    if (udp_num + tcp_num >= 50) {
       kill(fsrv->child_pid, 0);
-      if (afl->debug)
+      // if (afl->debug)
       printf("killed time:%lu\n", ++kill_time);
       check_times = 0;
       ewma_avg = 100.0;
-     }
- } 
+      have_disconnected = 0;
+    }
+ }
 
  if (afl->debug)
      printf("bitmap_size:%u\n", test_bitmap_size);
 
-  //add
-  //xzw
-  /* extern u8 need_send_pre_packet;
-  if (need_send_pre_packet) { 
-      send_pre_packet(afl); 
-       afl_fsrv_run_target(fsrv, timeout, &afl->stop_soon);
-  }*/
+
 
 
 #ifdef PROFILING
@@ -231,26 +310,63 @@ fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
 //xzw:mem就是包的buffer
 u8  *num_filename;  // zyp
 
+int count_connections(afl_forkserver_t * fsrv, int protocol){
+  char  path[256];
+  FILE *fp;
+  int   count = 0;
+  char  buffer[1024];
+
+  // 根据协议类型选择正确的文件路径
+  if (protocol == 1) {
+      snprintf(path, sizeof(path), "/proc/%d/net/udp", fsrv->child_pid);
+  } else if (protocol == 0) {
+      snprintf(path, sizeof(path), "/proc/%d/net/tcp", fsrv->child_pid);
+  } else {
+      fprintf(stderr, "Invalid protocol type. Use 1 for UDP, 0 for TCP.\n");
+      return -1;
+  }
+  // 尝试打开文件
+  fp = fopen(path, "r");
+  if (fp == NULL) {
+    perror("Unable to open file");
+    return -1;
+  }
+
+  if (fgets(buffer, sizeof(buffer), fp) == NULL) {
+    fclose(fp);
+    return -1;
+  }
+
+  while (fgets(buffer, sizeof(buffer), fp) != NULL) {
+    if (strlen(buffer) > 0) { count++; }
+  }
+
+  fclose(fp);
+
+  return count;  // 返回计数，不减1因为跳过了第一行标题
+}
+
+
 u32 __attribute__((hot)) 
 write_to_testcase(afl_state_t * afl, void **mem, u32 len, u32 fix){ 
 
   u8 sent = 0;
 
-  
-  num_filename = alloc_printf("%s/.num_cur_input", afl->out_dir);
-  u8 *num_buf;
+  if (unlikely(!afl->fsrv.use_shmem_fuzz)) {
+    num_filename = alloc_printf("%s/.num_cur_input", afl->out_dir);
+    u8 *num_buf;
 
-  int num_fd = open(num_filename, O_RDWR | O_TRUNC | O_CREAT, DEFAULT_PERMISSION);
+    int num_fd =
+        open(num_filename, O_RDWR | O_TRUNC | O_CREAT, DEFAULT_PERMISSION);
 
- if (num_fd < 0) {
-    FATAL("Open num_file failed");
+    if (num_fd < 0) { FATAL("Open num_file failed"); }
+
+    ck_write(num_fd, &len, sizeof(len), afl->out_dir);
+    // printf("fuzz write to num file,length=%u\n",len);
+
+    ck_free(num_filename);
+    close(num_fd);
   }
-
- ck_write(num_fd, &len, sizeof(len), afl->out_dir);
- //printf("fuzz write to num file,length=%u\n",len);
-
- ck_free(num_filename);
- close(num_fd);
 
   if (unlikely(afl->custom_mutators_count)) {
 
@@ -340,8 +456,7 @@ write_to_testcase(afl_state_t * afl, void **mem, u32 len, u32 fix){
       });
 
     }
-    //xzw 在write_to_testcase之前就判断是否需要重新发前缀包
-    //extern u8 need_send_pre_packet;
+
     if (likely(!sent)) {
       /* everything as planned. use the potentially new data. */
       afl_fsrv_write_to_testcase(&afl->fsrv, *mem, new_size);

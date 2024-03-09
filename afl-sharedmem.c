@@ -71,6 +71,8 @@ void afl_shm_deinit(sharedmem_t *shm) {
   if (shm->shmemfuzz_mode) {
 
     unsetenv(SHM_FUZZ_ENV_VAR);
+    //printf("\nSHM_FUZZ_ENV_VAR: %s\n", getenv("SHM_FUZZ_ENV_VAR"));
+
 
   } else {
 
@@ -135,6 +137,7 @@ void afl_shm_deinit(sharedmem_t *shm) {
   shm->map = NULL;
 
 }
+
 
 /* Configure shared memory.
    Returns a pointer to shm->map for ease of use.

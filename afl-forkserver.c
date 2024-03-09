@@ -930,7 +930,7 @@ void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
     close(st_pipe[0]);
     close(st_pipe[1]);
     // add
-    close(send_pipe[0]);
+    //close(send_pipe[0]);
     close(recv_pipe[1]);
     // add end
     close(fsrv->out_dir_fd);
@@ -1063,7 +1063,11 @@ void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
 
       }
 
-      if ((status & FS_OPT_SHDMEM_FUZZ) == FS_OPT_SHDMEM_FUZZ) {
+      //xzw add for shm_fuzz :
+      //status = FS_OPT_SHDMEM_FUZZ;
+
+
+      //if ((status & FS_OPT_SHDMEM_FUZZ) == FS_OPT_SHDMEM_FUZZ) {
 
         if (fsrv->support_shmem_fuzz) {
 
@@ -1089,7 +1093,7 @@ void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
 
         }
 
-      }
+      //}
 
       if ((status & FS_OPT_MAPSIZE) == FS_OPT_MAPSIZE) {
 
@@ -1451,6 +1455,9 @@ void afl_fsrv_kill(afl_forkserver_t *fsrv) {
 
   close(fsrv->fsrv_ctl_fd);
   close(fsrv->fsrv_st_fd);
+  //xzw add
+  close(send_pipe[0]);
+
   fsrv->fsrv_pid = -1;
   fsrv->child_pid = -1;
 
@@ -1520,12 +1527,24 @@ afl_fsrv_write_to_testcase(afl_forkserver_t *fsrv, u8 *buf, size_t len) {
 
 #endif
 
+  //modified by xzw :add support to shmem_fuzz
+  if (likely(fsrv->use_shmem_fuzz)) {
+
+    if (unlikely(len + sizeof(len) > MAX_FILE)) len = MAX_FILE;
+
+    // 首先，将测试用例的长度写入共享内存的起始位置
+    *(fsrv->shmem_fuzz_len) = len;
+
+    memcpy(fsrv->shmem_fuzz, &len, sizeof(len));
+    // 然后，将测试用例数据复制到紧接长度信息之后的共享内存位置
+    memcpy(fsrv->shmem_fuzz + sizeof(len), buf, len);
+    /*
   if (likely(fsrv->use_shmem_fuzz)) {
 
     if (unlikely(len > MAX_FILE)) len = MAX_FILE;
 
     *fsrv->shmem_fuzz_len = len;
-    memcpy(fsrv->shmem_fuzz, buf, len);
+    memcpy(fsrv->shmem_fuzz, buf, len);*/
 #ifdef _DEBUG
     if (getenv("AFL_DEBUG")) {
 
@@ -1620,7 +1639,7 @@ u32 wait_after_send_one_usecs =
     10;  // 发送完一个种子中一块内容后的等待时间in us
 u32 wait_after_sendusecs = 1;  // 发送完一个种子所有内容后的等待时间in us
 u32 new_start_server_waitusecs = 1000000;  // 重启服务器后的等待时间 in us
-
+u8 connecte_timeout = 0;
 
 int net_send(int sockfd, struct timeval timeout, char *mem, unsigned int len) {
   unsigned int  byte_count = 0;
@@ -1663,6 +1682,74 @@ int net_send(int sockfd, struct timeval timeout, char *mem, unsigned int len) {
   return byte_count;
 }
 // add
+
+
+
+int set_nonblocking(int sockfd) {
+  int flags = fcntl(sockfd, F_GETFL, 0);
+  if (flags == -1) { return -1; }
+  return fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
+}
+
+int connect_with_timeout(int sockfd, const struct sockaddr *addr,
+                         socklen_t addrlen, int timeout_sec) {
+  // Set the socket as non-blocking
+  if (set_nonblocking(sockfd) < 0) {
+    perror("set_nonblocking failed");
+    return -1;
+  }
+
+  // Start connection attempt
+  int result = connect(sockfd, addr, addrlen);
+  if (result < 0 && errno != EINPROGRESS) {
+    // Connection attempt failed immediately
+    perror("connect failed");
+    return -1;
+  }
+
+  if (result == 0) {
+    // Connection succeeded immediately
+    return 0;
+  }
+
+  // Wait for the connection to succeed or fail
+  fd_set writefds;
+  FD_ZERO(&writefds);
+  FD_SET(sockfd, &writefds);
+  struct timeval tv;
+  tv.tv_sec = 0;
+  tv.tv_usec = timeout_sec;
+
+  result = select(sockfd + 1, NULL, &writefds, NULL, &tv);
+  if (result <= 0) {
+    // select failed or timeout
+
+    connecte_timeout = 1;
+
+    //perror("select failed or timeout");
+    return -1;
+  }
+
+  int       so_error;
+  socklen_t len = sizeof(so_error);
+  if (getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &so_error, &len) < 0) {
+    perror("getsockopt failed");
+    return -1;
+  }
+
+  if (so_error != 0) {
+    // Connection failed
+    errno = so_error;
+    //perror("connect failed");
+    return -1;
+  }
+
+  // Connection succeeded
+  return 0;
+}
+
+extern u8 isdebug;
+
 void send_udp_hook() {
   int                sockfd;
   struct sockaddr_in servaddr;
@@ -1695,40 +1782,44 @@ void send_udp_hook() {
     perror("sendto failed");
     exit(EXIT_FAILURE);
   }
+  if (isdebug)
   printf("UDP packet sent to %s:%d\n", net_ip, net_port);
   // 关闭套接字
   close(sockfd);
 }
 // add
-extern u8 isdebug;
+
+
 void send_tcp_hook() {
   int  sockfd;
   char buffer[6] = "hook ";
   sockfd = socket(AF_INET, SOCK_STREAM, 0);
   if (sockfd == -1) {
     perror("Socket creation failed");
-    return 1;
   }
   struct sockaddr_in servaddr;
   servaddr.sin_family = AF_INET;
   servaddr.sin_port = htons(net_port);
   servaddr.sin_addr.s_addr = inet_addr(net_ip);
-  if (connect(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr)) == -1) {
+  if (connect_with_timeout(sockfd, (struct sockaddr *)&servaddr,
+                           sizeof(servaddr), 1000) == -1) {
+    if (isdebug)
     perror("Connection failed");
     close(sockfd);
-    return 1;
+    return;
   }
   ssize_t bytes_sent = send(sockfd, buffer, strlen(buffer), 0);
   if (bytes_sent == -1) {
     perror("Send failed");
     close(sockfd);
-    return 1;
+    return;
   }
 
   if (isdebug)
   printf("TCP packet sent to %s:%d\n", net_ip, net_port);
 
   close(sockfd);
+  return;
 }
 
 // zyp modfied from aflnet
@@ -1836,12 +1927,39 @@ u8 exist_pid(int pid) {
   }
 }
 
+int clear_pipe(int fd) {
+
+    if (fd <= 0)  return -1;
+   
+
+  int flags = fcntl(fd, F_GETFL, 0);
+
+  if (flags == -1) return -1;
+
+  if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1) return -1;
+
+  char    buffer[1024];
+  ssize_t bytes_read;
+
+  while ((bytes_read = read(fd, buffer, sizeof(buffer))) > 0) {
+
+  }
+
+  if (bytes_read == -1 && errno != EAGAIN) {
+    return -1;
+  }
+
+  fcntl(fd, F_SETFL, flags);
+
+  return 0;  
+}
 
 /* Execute target application, monitoring for timeouts. Return status
    information. The called program will update afl->fsrv->trace_bits. */
 //xzw; 如果需要重新连接即send_tcp_hook，我们需要重新发送pre包
 u8 need_send_pre_packet = 0;
 extern u8 dis_connect;
+u8        build_connect = 1;  //1 need to build coneection, else 0
 extern u8 isdebug;
 fsrv_run_result_t __attribute__((hot))
 afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
@@ -2019,26 +2137,49 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
     int  check_send;
     char buf[4];
 
-    if ((check_send = write(send_pipe[1], "HALO", 4)) < 0) {
-      WARNF("Unable to write ");
-    }
-    if (isdebug) { printf("Write Hello to hook\n"); }
+     clear_pipe(send_pipe[0]);
+
+      if ((check_send = write(send_pipe[1], "HALO", 4)) < 0) {
+        WARNF("Unable to write ");
+      }
+      if (isdebug) { printf("Write Hello to hook\n"); }
+
     //exec_ms = 1;
     // 改为处理完当前种子hook端再向fuzzer发消息，因此这里同样需要等待完成
     u32 dummyv = 0;
 
-    exec_ms = read_s32_timed(recv_pipe[0], &dummyv, timeout, stop_soon_p);
+
+    if (build_connect) {
+      exec_ms = read_s32_timed(recv_pipe[0], &dummyv, timeout, stop_soon_p);
+      build_connect = 0;
+    } else {
+      exec_ms = read_s32_timed(recv_pipe[0], &dummyv, 1, stop_soon_p);
+    
+    }
+
+
+   clear_pipe(recv_pipe[0]);
+
+
 
     if (isdebug)
     printf("fuzz read:%d\n",dummyv);
 
-    if ((int)dummyv == -1) {
-        if (net_protocol == 1) {
-          send_udp_hook();
-        } else {
-          send_tcp_hook();
-        }
-    }
+     if ((int)dummyv == -1 || (int)dummyv == 842150450) {
+      if ((int)dummyv == 842150450 && isdebug) printf("\nfuzz recv disconnect\n");
+      if (net_protocol == 1) {
+        send_udp_hook();
+      } else {
+        send_tcp_hook();
+      }
+    } 
+
+     /* if (connecte_timeout) {
+      if ((check_send = write(send_pipe[1], "HALO", 4)) < 0) {
+        WARNF("Unable to write ");
+      }
+      connecte_timeout = 0;
+     }*/
   
 
 
@@ -2069,12 +2210,13 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
 
   // zyp
   if (use_net && !exist_pid(fsrv->child_pid)) { 
+      fsrv->total_execs++;
       return FSRV_RUN_CRASH; 
 }
 
   // zyp
   // 如果timeout但是child进程没有crash，则重新发起一个新连接send hook即可
-   if (use_net && exec_ms > timeout && !is_new_start) {
+   if (((use_net && exec_ms && build_connect) > timeout && !is_new_start)||(use_net && exec_ms>1 && !build_connect) ) {
     fsrv->total_execs++;
     return FSRV_RUN_TMOUT;
   }

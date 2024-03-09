@@ -28,7 +28,7 @@
 #include <limits.h>
 #include <string.h>
 #include "cmplog.h"
-
+#include "sharedmem.h"
 u8 is_perform_dry_run;
 
 
@@ -2831,6 +2831,22 @@ void setup_testcase_shmem(afl_state_t *afl) {
 #else
   u8 *shm_str = alloc_printf("%d", afl->shm_fuzz->shm_id);
   setenv(SHM_FUZZ_ENV_VAR, shm_str, 1);
+
+
+  //xzw added: send sh*t SHM_FUZZ_ENV_VAR
+  int shm_pipe[2];
+
+  if (pipe(shm_pipe) == -1)  PFATAL("pipe");
+
+  dup2(shm_pipe[0], FORKSRV_FD+10);
+
+  write(shm_pipe[1], shm_str, strlen(shm_str));  
+
+  close(shm_pipe[0]);
+  close(shm_pipe[1]);
+
+  printf("\nshm_id of afl:%d\n", afl->shm_fuzz->shm_id);
+
   ck_free(shm_str);
 #endif
   afl->fsrv.support_shmem_fuzz = 1;

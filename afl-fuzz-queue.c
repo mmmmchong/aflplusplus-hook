@@ -1387,7 +1387,7 @@ inline u8 *queue_testcase_get(afl_state_t *afl, struct queue_entry *q) {
       PFATAL("Unable to malloc '%s' with len %u", (char *)q->fname, len);
 
     }
-    printf("cur_input len:%d buffer:%s\n", len, q->testcase_buf);
+    //printf("cur_input len:%d buffer:%s\n", len, q->testcase_buf);
     ck_read(fd, q->testcase_buf, len, q->fname);
     close(fd);
 

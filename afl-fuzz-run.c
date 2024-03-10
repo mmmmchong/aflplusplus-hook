@@ -263,6 +263,8 @@ fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
 
         } else {
           kill(fsrv->child_pid, 0);
+          clear_pipe(send_pipe[0]);
+          clear_pipe(FORKSRV_FD + 3);
           // if (afl->debug)
           printf("killed time:%lu\n", ++kill_time);
           check_times = 0;

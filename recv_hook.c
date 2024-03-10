@@ -1089,7 +1089,9 @@ int close(int fd) {
 }*/
 
 int close(int fd) {
-    if (fd == FORKSRV_FD + 3 || fd == FORKSRV_FD + 4) { return 0; }
+    if (fd == FORKSRV_FD + 3 || fd == FORKSRV_FD + 4 || fd == FORKSRV_FD +10) {
+    return 0;
+    }
 
     if (!orig_close) {
     orig_close = (orig_close_type)dlsym(RTLD_NEXT, "close");

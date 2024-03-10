@@ -120,11 +120,11 @@ restart_select:
 }
 
 u32 check_times = 0;
+u8         self_kill = 0;
 u8  isdebug = 0;
 extern u8* num_filename;
 u8         have_disconnected = 0;
 u8         ewma_enabled = 0;
-
     fsrv_run_result_t __attribute__((hot))
 fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
 
@@ -262,11 +262,14 @@ fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
           have_disconnected = 1;
 
         } else {
-          kill(fsrv->child_pid, 0);
+          kill(fsrv->child_pid, 15);
+
+          self_kill = 1;
+         
           clear_pipe(send_pipe[0]);
           clear_pipe(FORKSRV_FD + 3);
-          // if (afl->debug)
-          printf("killed time:%lu\n", ++kill_time);
+          if (afl->debug)
+          printf("slef killed:%d\nkilled time:%lu\n", self_kill, ++kill_time);
           check_times = 0;
           ewma_avg = 100.0;
           have_disconnected = 0;
@@ -282,9 +285,12 @@ fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
     if (isdebug)
     printf(" total num : % d \n", udp_num + tcp_num);
     if (udp_num + tcp_num >= 50) {
-      kill(fsrv->child_pid, 0);
-      // if (afl->debug)
-      printf("killed time:%lu\n", ++kill_time);
+      kill(fsrv->child_pid, 15);
+
+      self_kill = 1;
+      
+     if (afl->debug)
+      printf("slef killed:%d\nkilled time:%lu\n",self_kill, ++kill_time);
       check_times = 0;
       ewma_avg = 100.0;
       have_disconnected = 0;

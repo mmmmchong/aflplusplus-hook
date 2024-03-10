@@ -1958,6 +1958,8 @@ int clear_pipe(int fd) {
    information. The called program will update afl->fsrv->trace_bits. */
 //xzw; 如果需要重新连接即send_tcp_hook，我们需要重新发送pre包
 u8 need_send_pre_packet = 0;
+extern u8 self_kill;
+u8        stupid_double_check = 0;
 extern u8 dis_connect;
 u8        build_connect = 1;  //1 need to build coneection, else 0
 extern u8 isdebug;
@@ -2053,7 +2055,7 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
       if (!exist_pid(fsrv->child_pid)) { need_new_prog = 1; }
     }
   }
-  if (!use_net || (use_net && need_new_prog)) {  // zyp
+  if (!use_net || (use_net && need_new_prog) || self_kill) {  // zyp
 
     if ((res = write(fsrv->fsrv_ctl_fd, &write_value, 4)) != 4) {
       if (*stop_soon_p) { return 0; }
@@ -2067,7 +2069,7 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
       RPFATAL(res, "Unable to request new process from fork server (OOM?)");
     }
 
-    //is_new_start = 1;
+    is_new_start = 1;
   }
 
 #ifdef AFL_PERSISTENT_RECORD
@@ -2136,7 +2138,7 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
     // add
     int  check_send;
     char buf[4];
-
+    u8   double_check = 0;
      clear_pipe(send_pipe[0]);
 
       if ((check_send = write(send_pipe[1], "HALO", 4)) < 0) {
@@ -2209,10 +2211,21 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
   }
 
   // zyp
-  if (use_net && !exist_pid(fsrv->child_pid)) { 
+  if (use_net && !exist_pid(fsrv->child_pid) ) { 
       fsrv->total_execs++;
-      return FSRV_RUN_CRASH; 
-}
+    if (isdebug)
+      printf("is self killed?:%d\n", self_kill);
+      if (!self_kill) {
+      return FSRV_RUN_CRASH;
+      } else {
+      self_kill = 0;
+      }
+     
+
+      
+  }
+
+
 
   // zyp
   // 如果timeout但是child进程没有crash，则重新发起一个新连接send hook即可

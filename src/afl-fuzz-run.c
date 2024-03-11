@@ -55,6 +55,7 @@ extern int send_pipe[1];
 extern int recv_pipe[1];
 extern u8 net_protocol; 
 
+u8 punished_timeouts = 0;
 static u32 __attribute__((hot))
 read_s32_timed(s32 fd, s32 *buf, u32 timeout_ms, volatile u8 *stop_soon_p) {
   fd_set readfds;
@@ -279,7 +280,7 @@ fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
  }
 
 
- if (fsrv->total_execs % 100 == 0) {
+ if (fsrv->total_execs % 100 == 0 && fsrv->total_execs>0) {
     u32 udp_num = count_connections(fsrv, 1);
     u32 tcp_num = count_connections(fsrv, 0);
     if (isdebug)
@@ -296,6 +297,10 @@ fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
       have_disconnected = 0;
     }
  }
+
+  
+
+
 
  if (afl->debug)
      printf("bitmap_size:%u\n", test_bitmap_size);

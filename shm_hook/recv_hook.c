@@ -395,6 +395,13 @@ recv(int sockfd, void *buf, size_t len, int flags) {
       orig_seed_length=cur_seed_length = *(size_t *)shared_memory;
       
       if ((int)orig_seed_length == -1) {
+
+          if (shmdt(shared_memory) == -1) {
+          perror("shmdt failed");
+
+          return -1;
+        }
+
           return 0; 
       }
 
@@ -526,7 +533,15 @@ recvfrom(int sockfd, void *buf, size_t len, int flags,
     if (need_length) {
       orig_seed_length = cur_seed_length = *(size_t *)shared_memory;
 
-      if ((int)orig_seed_length == -1) { return 0; }
+      if ((int)orig_seed_length == -1) { 
+          
+          if (shmdt(shared_memory) == -1) {
+          perror("shmdt failed");
+
+          return -1;
+        }
+
+          return 0; }
 
       need_length = 0;
     }
@@ -655,7 +670,15 @@ ssize_t __attribute__((hot)) read(int fd, void *buf, size_t count) {
     if (need_length) {
       orig_seed_length = cur_seed_length = *(size_t *)shared_memory;
 
-      if ((int)orig_seed_length == -1) { return 0; }
+      if ((int)orig_seed_length == -1) {
+          
+          if (shmdt(shared_memory) == -1) {
+          perror("shmdt failed");
+
+          return -1;
+          }
+
+          return 0; }
 
       need_length = 0;
     }
@@ -824,7 +847,15 @@ ssize_t recvmsg(int sockfd, struct msghdr *msg, int flags) {
 
       orig_seed_length = cur_seed_length = *(size_t *)shared_memory;
 
-      if ((int)orig_seed_length == -1) { return 0; }
+      if ((int)orig_seed_length == -1) { 
+          
+          if (shmdt(shared_memory) == -1) {
+          perror("shmdt failed");
+
+          return -1;
+          }
+
+          return 0; }
 
       need_length = 0;
    }

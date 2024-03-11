@@ -7,9 +7,9 @@ A high speed protocol fuzz based on shared memory
 HSPFuzz is based on [AFLplusplus](https://github.com/AFLplusplus/AFLplusplus), so to build HSPFuzz
 
 ```bash
-For aflplusplus
-
 git clone -b shm_fuzz https://github.com/mmmmchong/aflplusplus-hook.git
+
+For aflplusplus
 
 make
 

@@ -1201,7 +1201,7 @@ int  statsd_send_metric(afl_state_t *afl);
 int  statsd_format_metric(afl_state_t *afl, char *buff, size_t bufflen);
 
 /* Run */
-int               count_connections(afl_forkserver_t *fsrv, int protocol);
+u32                count_connections(afl_forkserver_t *fsrv, int protocol);
 double            ewma(double prev_avg, double value, double alpha);
 void              sync_fuzzers(afl_state_t *);
 u32  write_to_testcase(afl_state_t *afl, void **mem, u32 len, u32 fix);

@@ -63,6 +63,13 @@ u8  isdebug = 0;
 extern u8* num_filename;
 u8         have_disconnected = 0;
 u8         ewma_enabled = 0;
+
+
+// xzw add for ewma
+double ewma(double prev_avg, double value, double alpha) {
+  return alpha * value + (1 - alpha) * prev_avg;
+}
+
     fsrv_run_result_t __attribute__((hot))
 fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
 
@@ -259,10 +266,10 @@ fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
 //xzw:mem就是包的buffer
 u8  *num_filename;  // zyp
 
-int count_connections(afl_forkserver_t * fsrv, int protocol){
+u32  count_connections(afl_forkserver_t * fsrv, int protocol){
   char  path[256];
   FILE *fp;
-  int   count = 0;
+  u32   count = 0;
   char  buffer[1024];
 
   // 根据协议类型选择正确的文件路径
@@ -303,7 +310,6 @@ write_to_testcase(afl_state_t * afl, void **mem, u32 len, u32 fix){
 
   if (unlikely(!afl->fsrv.use_shmem_fuzz)) {
     num_filename = alloc_printf("%s/.num_cur_input", afl->out_dir);
-    u8 *num_buf;
 
     int num_fd =
         open(num_filename, O_RDWR | O_TRUNC | O_CREAT, DEFAULT_PERMISSION);
@@ -1362,19 +1368,3 @@ common_fuzz_stuff(afl_state_t *afl, u8 *out_buf, u32 len) {
 
 }
 
-
-//xzw add for ewma
-double ewma(double prev_avg, double value, double alpha) {
-  return alpha * value + (1 - alpha) * prev_avg;
-}
-
-u8 check_state(afl_state_t* afl,double bitmap,double threadhold) {
-  u32 entry;
-  for (entry = 0; entry < afl->queued_items; ++entry)
-    if (!afl->queue_buf[entry]->disabled) { 
-    printf("bitmap of seed entry[%lu]:%lu\n", entry,
-             afl->queue_buf[entry]->bitmap_size);
-    
-    }
-
-}

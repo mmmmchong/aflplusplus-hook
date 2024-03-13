@@ -1207,53 +1207,7 @@ inline void queue_testcase_retake_mem(afl_state_t *afl, struct queue_entry *q,
   }
 
 }
-//xzw
-inline u8 *get_packet_by_id(u32 id, int queue_size, int queue_type) {
-  
-  struct queue_entry **selected_queue;
-  int                   i = 0;
-  // xzw:
-  // 0代表pre
-  // 1代表rep
-  // 2代表non
-  switch (queue_type) {
-    case PRE_PACKET:
-      selected_queue = pre_q;
-      break;
-    case REP_PACKET:
-      selected_queue = rep_q;
-      break;
-    case NON_PACKET:
-      selected_queue = non_q;
-      break;
-    default:
-      return 0;
-  }
 
-    u8 *filename;
-    u8 *buf;
-    
-    for (i = 0; i < queue_size; ++i) {
-         if (selected_queue[i] != NULL && selected_queue[i]->id == id) {
-      filename = alloc_printf("%s",selected_queue[i]->fname);
-      buf = (u8 *)ck_alloc(sizeof(u8) * selected_queue[i]->len);
-      break;
-        } 
-    }
-    if (i > queue_size) { PFATAL("Nonexistent id:%d", id);
-    }
-    int fd = open((char *)filename, O_RDONLY);
-
-    if (unlikely(fd < 0)) {
-        PFATAL("Unable to open '%s'", (char *)selected_queue[i]->fname);
-    }
-    ck_read(fd, buf, selected_queue[i]->len, filename);
-    ck_free(filename);
-    close(fd);
-    return buf;
-
-
-  }
   /* Returns the testcase buf from the file behind this queue entry.
   Increases the refcount. */
 

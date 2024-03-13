@@ -827,10 +827,6 @@ typedef struct afl_state {
 
 } afl_state_t;
 
-struct queue_entry *pre_q[MAX_PACKET], /*   prefix packet queue            */
-    *rep_q[MAX_PACKET],                 /*   repeatbale packet queue        */
-    *non_q[MAX_PACKET];                 /*   unrepeatbale packet queue      */
-
 
 #ifndef AFL_FUZZ_H
   #define AFL_FUZZ_H
@@ -1140,7 +1136,6 @@ void        deinit_py(void *);
 
 /* Queue */
     //xzw
-u8 *get_packet_by_id(u32 id, int queue_size, int queue_type);
 void       mark_as_det_done(afl_state_t *, struct queue_entry *);
 void mark_as_variable(afl_state_t *, struct queue_entry *);
 void mark_as_redundant(afl_state_t *, struct queue_entry *, u8);

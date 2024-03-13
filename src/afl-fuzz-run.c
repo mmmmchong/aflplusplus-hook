@@ -56,69 +56,6 @@ extern int recv_pipe[1];
 extern u8 net_protocol; 
 
 u8 punished_timeouts = 0;
-static u32 __attribute__((hot))
-read_s32_timed(s32 fd, s32 *buf, u32 timeout_ms, volatile u8 *stop_soon_p) {
-  fd_set readfds;
-  FD_ZERO(&readfds);
-  FD_SET(fd, &readfds);
-  struct timeval timeout;
-  int            sret;
-  ssize_t        len_read;
-
-  timeout.tv_sec = (timeout_ms / 1000);
-  timeout.tv_usec = (timeout_ms % 1000) * 1000;
-#if !defined(__linux__)
-  u32 read_start = get_cur_time_us();
-#endif
-
-  /* set exceptfds as well to return when a child exited/closed the pipe. */
-restart_select:
-  sret = select(fd + 1, &readfds, NULL, NULL, &timeout);
-
-  if (likely(sret > 0)) {
-  restart_read:
-    if (*stop_soon_p) {
-      // Early return - the user wants to quit.
-      return 0;
-    }
-
-    len_read = read(fd, (u8 *)buf, 4);
-    // xzw:
-    // printf("read from hook success\n");
-
-    if (likely(len_read == 4)) {  // for speed we put this first
-
-#if defined(__linux__)
-      u32 exec_ms = MIN(
-          timeout_ms,
-          ((u64)timeout_ms - (timeout.tv_sec * 1000 + timeout.tv_usec / 1000)));
-#else
-      u32 exec_ms = MIN(timeout_ms, (get_cur_time_us() - read_start) / 1000);
-#endif
-
-      // ensure to report 1 ms has passed (0 is an error)
-      return exec_ms > 0 ? exec_ms : 1;
-
-    } else if (unlikely(len_read == -1 && errno == EINTR)) {
-      goto restart_read;
-
-    } else if (unlikely(len_read < 4)) {
-      return 0;
-    }
-
-  } else if (unlikely(!sret)) {
-    *buf = -1;
-    return timeout_ms + 1;
-
-  } else if (unlikely(sret < 0)) {
-    if (likely(errno == EINTR)) goto restart_select;
-
-    *buf = -1;
-    return 0;
-  }
-
-  return 0;  // not reached
-}
 
 u32 check_times = 0;
 u8         self_kill = 0;
@@ -218,7 +155,6 @@ fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
           if (unlikely(!afl->fsrv.use_shmem_fuzz)) {
 
             num_filename = alloc_printf("%s/.num_cur_input", afl->out_dir);
-            u8 *num_buf;
 
             int num_fd = open(num_filename, O_RDWR | O_TRUNC | O_CREAT,
                               DEFAULT_PERMISSION);

@@ -451,28 +451,10 @@ extern u8 use_net;
 /* Check if the result of an execve() during routine fuzzing is interesting,
    save or queue the input test case for further analysis if so. Returns 1 if
    entry is saved, 0 otherwise. */
-struct queue_entry *new_q;
+
 u8 __attribute__((hot))
 save_if_interesting(afl_state_t *afl, void *mem, u32 len, u8 fault) {
 
-
-     // xzw
-  extern u32 test_bitmap_size;
-  u32        orig_bitmap_size = test_bitmap_size;
-  extern u8  need_send_pre_packet;
-  u8         find = 0;
-  u8         round = 0;
-  int        i, j;
-  u8         done = 0;
-  u8        *send_buf;
-  u8         length = 0;
-  extern u8  have_write_to_num_file;
-  extern u32 test_bitmap_size;
-  u8         ret;
-  u32        original_bitmap = test_bitmap_size;
-  u8         type = REP_PACKET;
-
-  new_q = (struct queue_entry *)ck_alloc(sizeof(struct queue_entry));
   if (unlikely(len == 0)) { return 0; }
 
   if (unlikely(fault == FSRV_RUN_TMOUT && afl->afl_env.afl_ignore_timeouts)) { //不忽略timeout

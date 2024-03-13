@@ -86,7 +86,7 @@ fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
   }
 
 #endif
-  u32    max_bitsize = 0;
+
       fsrv_run_result_t res =
           afl_fsrv_run_target(fsrv, timeout, &afl->stop_soon);
       //add
@@ -189,7 +189,6 @@ fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
           }
 
           int  check_send;
-          char buf[4];
 
           if ((check_send = write(send_pipe[1], "HALO", 4)) < 0) {
             WARNF("Unable to write ");

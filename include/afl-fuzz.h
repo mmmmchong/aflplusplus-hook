@@ -172,16 +172,7 @@ struct packet_queue {
   
 };
 
-struct queue_entry {   //xzw:采用新的三条队列去维护我们的包
-
-  /* xzw added
-  u8  pre_num; //xzw:对应队列包的个数
-  u8  *pre_id; //xzw:保存对应的id
-  u8  rep_num;
-  u8  *rep_id;
-  u8  non_num;
-  u8  *non_id;
-  //xzw added*/
+struct queue_entry {   
 
   u8 *fname;                            /* File name for the test case      */
   u32 len;                              /* Input length                     */

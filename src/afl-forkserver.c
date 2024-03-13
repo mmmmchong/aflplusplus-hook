@@ -1747,7 +1747,7 @@ int connect_with_timeout(int sockfd, const struct sockaddr *addr,
   // Connection succeeded
   return 0;
 }
-
+//xzw
 extern u8 isdebug;
 
 void send_udp_hook() {
@@ -1782,9 +1782,7 @@ void send_udp_hook() {
     perror("sendto failed");
     exit(EXIT_FAILURE);
   }
-  if (isdebug)
-  printf("UDP packet sent to %s:%d\n", net_ip, net_port);
-  // 关闭套接字
+
   close(sockfd);
 }
 // add
@@ -1803,8 +1801,6 @@ void send_tcp_hook() {
   servaddr.sin_addr.s_addr = inet_addr(net_ip);
   if (connect_with_timeout(sockfd, (struct sockaddr *)&servaddr,
                            sizeof(servaddr), 1000) == -1) {
-    if (isdebug)
-    perror("Connection failed");
     close(sockfd);
     return;
   }
@@ -1815,8 +1811,6 @@ void send_tcp_hook() {
     return;
   }
 
-  if (isdebug)
-  printf("TCP packet sent to %s:%d\n", net_ip, net_port);
 
   close(sockfd);
   return;
@@ -1962,7 +1956,7 @@ extern u8 self_kill;
 u8        stupid_double_check = 0;
 extern u8 dis_connect;
 u8        build_connect = 1;  //1 need to build coneection, else 0
-extern u8 isdebug;
+u8        is_new_start;
 fsrv_run_result_t __attribute__((hot))
 afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
                     volatile u8 *stop_soon_p) {
@@ -2049,7 +2043,7 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
   /* we have the fork server (or faux server) up and running
   First, tell it if the previous run timed out. */
   u8 need_new_prog = 0;
-  extern u8 is_new_start ;
+
   if (use_net) {  // zyp
     if (!need_new_prog) {
       if (!exist_pid(fsrv->child_pid)) { need_new_prog = 1; }

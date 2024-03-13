@@ -38,6 +38,7 @@
  * Nyx related typedefs taken from libnyx.h
  */
 
+
 typedef enum NyxReturnValue {
 
   Normal,
@@ -227,6 +228,7 @@ fsrv_run_result_t afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
 void              afl_fsrv_killall(void);
 void              afl_fsrv_deinit(afl_forkserver_t *fsrv);
 void              afl_fsrv_kill(afl_forkserver_t *fsrv);
+
 
 #ifdef __APPLE__
   #define MSG_FORK_ON_APPLE                                                    \

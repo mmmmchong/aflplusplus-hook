@@ -42,7 +42,7 @@ u64 time_spent_working = 0;
    information. The called program will update afl->fsrv->trace_bits. */
 //xzw
 u32 test_bitmap_size;
-u8  is_new_start = 1;
+
 // xzw add for ewma
 double ewma_alpha = 0.20;  // alpha值
 double ewma_avg = 100.00;   // EWMA值

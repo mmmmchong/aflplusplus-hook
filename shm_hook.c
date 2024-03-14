@@ -396,6 +396,8 @@ recv(int sockfd, void *buf, size_t len, int flags) {
       
       if ((int)orig_seed_length == -1) {
 
+          printf("disconnected!\n");
+
           if (shmdt(shared_memory) == -1) {
           perror("shmdt failed");
 
@@ -535,6 +537,8 @@ recvfrom(int sockfd, void *buf, size_t len, int flags,
 
       if ((int)orig_seed_length == -1) { 
           
+          printf("disconnected!\n");
+
           if (shmdt(shared_memory) == -1) {
           perror("shmdt failed");
 
@@ -672,6 +676,8 @@ ssize_t __attribute__((hot)) read(int fd, void *buf, size_t count) {
 
       if ((int)orig_seed_length == -1) {
           
+          printf("disconnected!\n");
+
           if (shmdt(shared_memory) == -1) {
           perror("shmdt failed");
 
@@ -796,6 +802,9 @@ ssize_t recvmsg(int sockfd, struct msghdr *msg, int flags) {
     shared_memory = shmat(shm_id, NULL, 0);
 
     if (shared_memory == (void *)-1) {
+
+        printf("shm_id:%d\n", shm_id);
+
       perror("shmat failed");
 
       return -1;
@@ -849,6 +858,8 @@ ssize_t recvmsg(int sockfd, struct msghdr *msg, int flags) {
 
       if ((int)orig_seed_length == -1) { 
           
+          printf("disconnected!\n");
+
           if (shmdt(shared_memory) == -1) {
           perror("shmdt failed");
 
@@ -1220,21 +1231,27 @@ int dup3(int oldfd, int newfd, int flags) {
    }
 
 int get_shm_id() {
-    char    shm_id_str[10];  
+    char shm_id_str[10];
 
-    memset(shm_id_str, 0, sizeof(shm_id_str)); 
+    memset(shm_id_str, 0, sizeof(shm_id_str));
 
     read(FORKSRV_FD + 10, shm_id_str, sizeof(shm_id_str) - 1);
 
     if (!shm_id_str) {
     fprintf(stderr, "Environment variable SHM_FUZZ_ENV_VAR not set.\n");
     exit(EXIT_FAILURE);
+    } else {
+    write(FORKSRV_FD +11, shm_id_str, strlen(shm_id_str));  
     }
 
     if (DEBUG) printf("shm_id:%d\n", atoi(shm_id_str));
 
     return atoi(shm_id_str);
    }
+
+
+
+
 
 /*
 typedef int (*orig_getpeername_type)(int sockfd, struct sockaddr *addr,

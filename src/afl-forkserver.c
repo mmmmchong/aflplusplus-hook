@@ -2044,12 +2044,15 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
   First, tell it if the previous run timed out. */
   u8 need_new_prog = 0;
 
+  if (fsrv->debug)
+  printf("\npre_child_pid:%d\n", fsrv->child_pid);
+
   if (use_net) {  // zyp
     if (!need_new_prog) {
       if (!exist_pid(fsrv->child_pid)) { need_new_prog = 1; }
     }
   }
-  if (!use_net || (use_net && need_new_prog) || self_kill) {  // zyp
+  if (!use_net || (use_net && need_new_prog) ) {  // zyp
 
     if ((res = write(fsrv->fsrv_ctl_fd, &write_value, 4)) != 4) {
       if (*stop_soon_p) { return 0; }
@@ -2057,6 +2060,9 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
     }
 
     fsrv->last_run_timed_out = 0;
+
+    if (fsrv->debug)
+     printf("\npre_child_pid:%d\n", fsrv->child_pid);
 
     if ((res = read(fsrv->fsrv_st_fd, &fsrv->child_pid, 4)) != 4) {
       if (*stop_soon_p) { return 0; }
@@ -2085,6 +2091,8 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
   }
 
 #endif
+  if (fsrv->debug)
+  printf("\nchild_pid:%d\n", fsrv->child_pid);
 
   if (fsrv->child_pid <= 0) {
 
@@ -2102,7 +2110,7 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
 
   // zyp
   if (is_new_start) {
-    usleep(new_start_server_waitusecs);
+    //usleep(new_start_server_waitusecs);
     if (net_protocol == 1) {
       send_udp_hook();
     } else {

@@ -1036,6 +1036,10 @@ void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
     if ((status & FS_OPT_ERROR) == FS_OPT_ERROR)
       report_error_and_exit(FS_OPT_GET_ERROR(status));
 
+          // xzw add: must enable fu*king shm 
+        fsrv->use_shmem_fuzz = 1;
+    fsrv->support_shmem_fuzz = 1;
+
     if ((status & FS_OPT_ENABLED) == FS_OPT_ENABLED) {
 
       // workaround for recent AFL++ versions
@@ -1066,7 +1070,6 @@ void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
       //xzw add for shm_fuzz :
       //status = FS_OPT_SHDMEM_FUZZ;
 
-
       //if ((status & FS_OPT_SHDMEM_FUZZ) == FS_OPT_SHDMEM_FUZZ) {
 
         if (fsrv->support_shmem_fuzz) {
@@ -1092,7 +1095,8 @@ void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
               "it.");
 
         }
-
+        printf(" fsrv->use_shmem_fuzz:%d\n", fsrv->use_shmem_fuzz);
+        printf(" fsrv->support_shmem_fuzz:%d\n", fsrv->support_shmem_fuzz);
       //}
 
       if ((status & FS_OPT_MAPSIZE) == FS_OPT_MAPSIZE) {
@@ -1526,18 +1530,29 @@ afl_fsrv_write_to_testcase(afl_forkserver_t *fsrv, u8 *buf, size_t len) {
   }
 
 #endif
-
+  if (fsrv->debug) printf("fsrv ues shm?:%d\n", fsrv->use_shmem_fuzz);
   //modified by xzw :add support to shmem_fuzz
   if (likely(fsrv->use_shmem_fuzz)) {
 
     if (unlikely(len + sizeof(len) > MAX_FILE)) len = MAX_FILE;
 
     // 首先，将测试用例的长度写入共享内存的起始位置
-    *(fsrv->shmem_fuzz_len) = len;
+    *fsrv->shmem_fuzz_len = len;
+
+    if (fsrv->debug)
+    printf("fuzz write len=%u\n" ,len);
 
     memcpy(fsrv->shmem_fuzz, &len, sizeof(len));
     // 然后，将测试用例数据复制到紧接长度信息之后的共享内存位置
     memcpy(fsrv->shmem_fuzz + sizeof(len), buf, len);
+
+    if (fsrv->debug) { 
+        printf("fuzz write shm :%s", fsrv->shmem_fuzz);
+      for (int i = 0; i < len; i++) {
+        printf("%02X ", (unsigned char *)(fsrv->shmem_fuzz)[i]);
+      }
+      printf("\n");
+    }
     /*
   if (likely(fsrv->use_shmem_fuzz)) {
 
@@ -2044,8 +2059,6 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
   First, tell it if the previous run timed out. */
   u8 need_new_prog = 0;
 
-  if (fsrv->debug)
-  printf("\npre_child_pid:%d\n", fsrv->child_pid);
 
   if (use_net) {  // zyp
     if (!need_new_prog) {
@@ -2061,8 +2074,6 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
 
     fsrv->last_run_timed_out = 0;
 
-    if (fsrv->debug)
-     printf("\npre_child_pid:%d\n", fsrv->child_pid);
 
     if ((res = read(fsrv->fsrv_st_fd, &fsrv->child_pid, 4)) != 4) {
       if (*stop_soon_p) { return 0; }

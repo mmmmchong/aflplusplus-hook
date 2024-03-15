@@ -91,8 +91,9 @@ fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
 
       fsrv_run_result_t res =
           afl_fsrv_run_target(fsrv, timeout, &afl->stop_soon);
+
       //add
- test_bitmap_size = count_bytes(afl, afl->fsrv.trace_bits);
+     test_bitmap_size = count_bytes(afl, afl->fsrv.trace_bits);
 
 //xzw added to check state
 //We check the state of the PUT by replaying the seeds that previously triggered new code coverage,
@@ -113,101 +114,93 @@ fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
 
 
  if (ewma_enabled) {
+        pre_bitmap = test_bitmap_size;
 
-    pre_bitmap = test_bitmap_size;
+        if (first_state) {
+          ewma_avg =
+              ewma((double)pre_bitmap, (double)test_bitmap_size, ewma_alpha);
 
-    if (first_state) {
-
-      ewma_avg = ewma((double)pre_bitmap, (double)test_bitmap_size, ewma_alpha);
-
-      first_state = 0;
-
-    } else {
-
-      ewma_avg = ewma(ewma_avg, (double)test_bitmap_size, ewma_alpha);
-
-    }
-
-
-
-    if (ewma_avg < 10.1 || equal_time>2000) {  // need to check state
-
-      check_times++;
-      
-        if (!have_disconnected ) {
-
-
-        int len = -1;
-        memcpy(fsrv->shmem_fuzz, &len, sizeof(len));
-
-
-          int  check_send;
-
-          if ((check_send = write(send_pipe[1], "HALO", 4)) < 0) {
-            WARNF("Unable to write ");
-          }
-
-          if (net_protocol) {
-            send_udp_hook();
-          } else {
-            send_tcp_hook();
-          }
-
-          ewma_avg = 100.0;
-
-          have_disconnected = 1;
+          first_state = 0;
 
         } else {
+          ewma_avg = ewma(ewma_avg, (double)test_bitmap_size, ewma_alpha);
+        }
 
-          s32 tmp_pid = fsrv->child_pid;
-          if (tmp_pid > 0) {
-            kill(tmp_pid, fsrv->child_kill_signal);
-            fsrv->child_pid = -1;
+        if (ewma_avg < 10.1 || equal_time > 2000) {  // need to check state
+
+          check_times++;
+
+          if (!have_disconnected) {
+            int len = -1;
+            memcpy(fsrv->shmem_fuzz, &len, sizeof(len));
+
+            int check_send;
+
+            clear_pipe(send_pipe[0]);
+
+            clear_pipe(FORKSRV_FD + 3);
+
+            if ((check_send = write(send_pipe[1], "HALO", 4)) < 0) {
+              WARNF("Unable to write ");
+            }
+
+            if (net_protocol) {
+              send_udp_hook();
+            } else {
+              send_tcp_hook();
+            }
+
+            ewma_avg = 100.0;
+
+            have_disconnected = 1;
+
+          } else {
+            s32 tmp_pid = fsrv->child_pid;
+            if (tmp_pid > 0) {
+              kill(tmp_pid, fsrv->child_kill_signal);
+              fsrv->child_pid = -1;
+            }
+
+            self_kill = 1;
+
+            if (afl->debug)
+
+              printf("slef killed:%d\nkilled time:%lu\n", self_kill,
+                     ++kill_time);
+
+            check_times = 0;
+
+            ewma_avg = 100.0;
+
+            have_disconnected = 0;
+
+            equal_time = 0;
           }
-
-          self_kill = 1;
-         
-          clear_pipe(send_pipe[0]);
-
-          clear_pipe(FORKSRV_FD + 3);
-
-          if (afl->debug)
-
-          printf("slef killed:%d\nkilled time:%lu\n", self_kill, ++kill_time);
-
-          check_times = 0;
-
-          ewma_avg = 100.0;
-
-          have_disconnected = 0;
-
-          equal_time = 0;
-        }
-      }
-    }
-
-
- if (fsrv->total_execs % 100 == 0 && fsrv->total_execs > 0 && !self_kill) {
-    u32 udp_num = count_connections(fsrv, 1);
-    u32 tcp_num = count_connections(fsrv, 0);
-    if (isdebug)
-    printf(" total num : % d \n", udp_num + tcp_num);
-    if (udp_num + tcp_num >= 50) {
-
-        s32 tmp_pid = fsrv->child_pid;
-        if (tmp_pid > 0) {
-          kill(tmp_pid, fsrv->child_kill_signal);
-          fsrv->child_pid = -1;
         }
 
-      self_kill = 1;
-      
-     if (afl->debug)
-      printf("slef killed:%d\nkilled time:%lu\n",self_kill, ++kill_time);
-      check_times = 0;
-      ewma_avg = 100.0;
-      have_disconnected = 0;
-    }
+        if (fsrv->total_execs % 100 == 0 && fsrv->total_execs > 0 &&
+            !self_kill) {
+          u32 udp_num = count_connections(fsrv, 1);
+          u32 tcp_num = count_connections(fsrv, 0);
+          if (isdebug) printf(" total num : % d \n", udp_num + tcp_num);
+          if (udp_num + tcp_num >= 50) {
+            s32 tmp_pid = fsrv->child_pid;
+            if (tmp_pid > 0) {
+              kill(tmp_pid, fsrv->child_kill_signal);
+              fsrv->child_pid = -1;
+            }
+
+            self_kill = 1;
+
+            if (afl->debug)
+              printf("slef killed:%d\nkilled time:%lu\n", self_kill,
+                     ++kill_time);
+            
+            check_times = 0;
+            ewma_avg = 100.0;
+            have_disconnected = 0;
+          }
+        }
  }
  /*
  if (fsrv->total_execs % 100000 == 0 && fsrv->total_execs > 0 && !self_kill &&
@@ -303,13 +296,13 @@ u32  count_connections(afl_forkserver_t * fsrv, int protocol){
       snprintf(path, sizeof(path), "/proc/%d/net/tcp", fsrv->child_pid);
   } else {
       fprintf(stderr, "Invalid protocol type. Use 1 for UDP, 0 for TCP.\n");
-      return -1;
+      return 0;
   }
   // 尝试打开文件
   fp = fopen(path, "r");
   if (fp == NULL) {
-    perror("Unable to open file");
-    return -1;
+    //perror("Unable to open file");
+    return 0;
   }
 
   if (fgets(buffer, sizeof(buffer), fp) == NULL) {

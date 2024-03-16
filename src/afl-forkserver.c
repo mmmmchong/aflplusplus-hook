@@ -2208,7 +2208,7 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
 
 
    // if (isdebug)
-    printf("fuzz read:%d\n",dummyv);
+    //printf("fuzz read:%d\n",dummyv);
 
      if ((int)dummyv == -1 || (int)dummyv == 842150450) {
       if ((int)dummyv == 842150450) printf("\nfuzz recv disconnect\n");
@@ -2257,7 +2257,7 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
   if (use_net && !exist_pid(fsrv->child_pid) ) { 
       fsrv->total_execs++;
     ///if (isdebug)
-      printf("is self killed?:%d\n", self_kill);
+      //printf("is self killed?:%d\n", self_kill);
       if (!self_kill) {
       return FSRV_RUN_CRASH;
       } else {

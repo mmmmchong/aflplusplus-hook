@@ -454,8 +454,6 @@ struct foreign_sync {
 
 typedef struct afl_state {
 
-//xzw
-  double garmma;
 
 
   /* Position of this state in the global states list */

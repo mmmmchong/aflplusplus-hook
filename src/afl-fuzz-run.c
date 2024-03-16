@@ -114,6 +114,31 @@ fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
 
 
  if (ewma_enabled) {
+
+      if (fsrv->total_execs % 100 == 0 && fsrv->total_execs > 0 ) {
+          u32 udp_num = count_connections(fsrv, 1);
+          u32 tcp_num = count_connections(fsrv, 0);
+          if (isdebug) printf(" total num : % d \n", udp_num + tcp_num);
+          if (udp_num + tcp_num >= 50) {
+            s32 tmp_pid = fsrv->child_pid;
+            if (tmp_pid > 0) {
+              kill(tmp_pid, fsrv->child_kill_signal);
+              fsrv->child_pid = -1;
+            }
+
+            self_kill = 1;
+
+            if (afl->debug)
+              printf("slef killed:%d\nkilled time:%lu\n", self_kill,
+                     ++kill_time);
+
+            check_times = 0;
+            ewma_avg = 100.0;
+            have_disconnected = 0;
+          }
+        }
+
+
         pre_bitmap = test_bitmap_size;
 
         if (first_state) {
@@ -126,19 +151,21 @@ fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
           ewma_avg = ewma(ewma_avg, (double)test_bitmap_size, ewma_alpha);
         }
 
-        if (ewma_avg < 10.1 || equal_time > 2000) {  // need to check state
+        if ((ewma_avg < 10.1 || equal_time > 2000) &&
+            !self_kill) {  // need to check state
 
           check_times++;
 
           if (!have_disconnected) {
+
             int len = -1;
             memcpy(fsrv->shmem_fuzz, &len, sizeof(len));
 
             int check_send;
 
-            clear_pipe(send_pipe[0]);
+            //clear_pipe(send_pipe[0]);
 
-            clear_pipe(FORKSRV_FD + 3);
+            //clear_pipe(FORKSRV_FD + 3);
 
             if ((check_send = write(send_pipe[1], "HALO", 4)) < 0) {
               WARNF("Unable to write ");
@@ -178,30 +205,9 @@ fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
           }
         }
 
-        if (fsrv->total_execs % 100 == 0 && fsrv->total_execs > 0 &&
-            !self_kill) {
-          u32 udp_num = count_connections(fsrv, 1);
-          u32 tcp_num = count_connections(fsrv, 0);
-          if (isdebug) printf(" total num : % d \n", udp_num + tcp_num);
-          if (udp_num + tcp_num >= 50) {
-            s32 tmp_pid = fsrv->child_pid;
-            if (tmp_pid > 0) {
-              kill(tmp_pid, fsrv->child_kill_signal);
-              fsrv->child_pid = -1;
-            }
-
-            self_kill = 1;
-
-            if (afl->debug)
-              printf("slef killed:%d\nkilled time:%lu\n", self_kill,
-                     ++kill_time);
-            
-            check_times = 0;
-            ewma_avg = 100.0;
-            have_disconnected = 0;
-          }
-        }
  }
+
+
  /*
  if (fsrv->total_execs % 100000 == 0 && fsrv->total_execs > 0 && !self_kill &&
      !have_disconnected) {  //A disconnect may be better

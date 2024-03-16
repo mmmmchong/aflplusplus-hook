@@ -930,7 +930,7 @@ void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
     close(st_pipe[0]);
     close(st_pipe[1]);
     // add
-    //close(send_pipe[0]);
+    close(send_pipe[0]);
     close(recv_pipe[1]);
     // add end
     close(fsrv->out_dir_fd);
@@ -1963,6 +1963,31 @@ int clear_pipe(int fd) {
   return 0;  
 }
 
+int write_with_timeout(int fd, const void *buf, size_t count, int timeout_usec) {
+  fd_set         set;
+  struct timeval timeout;
+
+  FD_ZERO(&set);
+  FD_SET(fd, &set);
+
+
+  timeout.tv_sec = 0;
+  timeout.tv_usec = timeout_usec;
+
+  int ret = select(fd + 1, NULL, &set, NULL, &timeout);
+  if (ret > 0) {
+   
+    return write(fd, buf, count);
+  } else if (ret == 0) {
+    
+    errno = ETIMEDOUT;
+    return -1;
+  } else {
+    
+    return -1;
+  }
+}
+
 /* Execute target application, monitoring for timeouts. Return status
    information. The called program will update afl->fsrv->trace_bits. */
 //xzw; 如果需要重新连接即send_tcp_hook，我们需要重新发送pre包
@@ -2067,6 +2092,7 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
   }
   if (!use_net || (use_net && need_new_prog) ) {  // zyp
 
+      if (isdebug) printf("fuzz write to fsrv\n");
     if ((res = write(fsrv->fsrv_ctl_fd, &write_value, 4)) != 4) {
       if (*stop_soon_p) { return 0; }
       RPFATAL(res, "Unable to request new process from fork server (OOM?)");
@@ -2152,10 +2178,14 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
     int  check_send;
     char buf[4];
     u8   double_check = 0;
-     clear_pipe(send_pipe[0]);
+    //clear_pipe(send_pipe[0]);
+    
+     if (isdebug) printf("fuzz write HALO\n");
 
-      if ((check_send = write(send_pipe[1], "HALO", 4)) < 0) {
+     if ((check_send = write_with_timeout(send_pipe[1], "HALO", 4,1)) < 0) {
+      //if ((check_send = write(send_pipe[1], "HALO", 4)) < 0) {
         WARNF("Unable to write ");
+        //clear_pipe(send_pipe[0]);
       }
       if (isdebug) { printf("Write Hello to hook\n"); }
 

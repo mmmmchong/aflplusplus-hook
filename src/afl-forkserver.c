@@ -1763,7 +1763,7 @@ int connect_with_timeout(int sockfd, const struct sockaddr *addr,
   return 0;
 }
 //xzw
-extern u8 isdebug;
+
 
 void send_udp_hook() {
   int                sockfd;
@@ -2092,7 +2092,7 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
   }
   if (!use_net || (use_net && need_new_prog) ) {  // zyp
 
-      if (isdebug) printf("fuzz write to fsrv\n");
+      //if (isdebug) printf("fuzz write to fsrv\n");
     if ((res = write(fsrv->fsrv_ctl_fd, &write_value, 4)) != 4) {
       if (*stop_soon_p) { return 0; }
       RPFATAL(res, "Unable to request new process from fork server (OOM?)");
@@ -2180,14 +2180,14 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
     u8   double_check = 0;
     //clear_pipe(send_pipe[0]);
     
-     if (isdebug) printf("fuzz write HALO\n");
+     //if (isdebug) printf("fuzz write HALO\n");
 
      if ((check_send = write_with_timeout(send_pipe[1], "HALO", 4,1)) < 0) {
       //if ((check_send = write(send_pipe[1], "HALO", 4)) < 0) {
         WARNF("Unable to write ");
         //clear_pipe(send_pipe[0]);
       }
-      if (isdebug) { printf("Write Hello to hook\n"); }
+      //if (isdebug) { printf("Write Hello to hook\n"); }
 
     //exec_ms = 1;
     // 改为处理完当前种子hook端再向fuzzer发消息，因此这里同样需要等待完成
@@ -2207,11 +2207,11 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
 
 
 
-    if (isdebug)
+   // if (isdebug)
     printf("fuzz read:%d\n",dummyv);
 
      if ((int)dummyv == -1 || (int)dummyv == 842150450) {
-      if ((int)dummyv == 842150450 && isdebug) printf("\nfuzz recv disconnect\n");
+      if ((int)dummyv == 842150450) printf("\nfuzz recv disconnect\n");
       if (net_protocol == 1) {
         send_udp_hook();
       } else {
@@ -2256,7 +2256,7 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
   // zyp
   if (use_net && !exist_pid(fsrv->child_pid) ) { 
       fsrv->total_execs++;
-    if (isdebug)
+    ///if (isdebug)
       printf("is self killed?:%d\n", self_kill);
       if (!self_kill) {
       return FSRV_RUN_CRASH;

@@ -1988,6 +1988,31 @@ int write_with_timeout(int fd, const void *buf, size_t count, int timeout_usec) 
   }
 }
 
+ssize_t read_with_timeout(int fd, void *buf, size_t count) {
+  fd_set         readfds;
+  struct timeval timeout;
+  int            retval;
+
+  FD_ZERO(&readfds);
+  FD_SET(fd, &readfds);
+
+  // 设置超时时间为1毫秒
+  timeout.tv_sec = 0;
+  timeout.tv_usec = 1000;
+
+  retval = select(fd + 1, &readfds, NULL, NULL, &timeout);
+
+  if (retval == -1) {
+    perror("select()");
+    return -1;
+  } else if (retval) {
+    return read(fd, buf, count);
+  } else {
+
+    return 0;
+  }
+}
+
 /* Execute target application, monitoring for timeouts. Return status
    information. The called program will update afl->fsrv->trace_bits. */
 //xzw; 如果需要重新连接即send_tcp_hook，我们需要重新发送pre包
@@ -2184,8 +2209,12 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
 
      if ((check_send = write_with_timeout(send_pipe[1], "HALO", 4,1)) < 0) {
       //if ((check_send = write(send_pipe[1], "HALO", 4)) < 0) {
-        WARNF("Unable to write ");
-        //clear_pipe(send_pipe[0]);
+        //WARNF("Unable to write ");
+      int check = 1;
+      do {
+        check = read_with_timeout(send_pipe[0], buf, 1);
+      } while (check > 0);
+      //clear_pipe(FORKSRV_FD + 3);
       }
       //if (isdebug) { printf("Write Hello to hook\n"); }
 
@@ -2203,7 +2232,7 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
     }
 
 
-   clear_pipe(recv_pipe[0]);
+   //clear_pipe(recv_pipe[0]);
 
 
 

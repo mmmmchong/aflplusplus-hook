@@ -168,7 +168,7 @@ fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
             //clear_pipe(FORKSRV_FD + 3);
 
             if ((check_send = write(send_pipe[1], "HALO", 4)) < 0) {
-              WARNF("Unable to write ");
+              //WARNF("Unable to write ");
             }
 
             if (net_protocol) {

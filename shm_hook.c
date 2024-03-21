@@ -33,7 +33,7 @@ typedef uint16_t u16;
 typedef uint32_t u32;
 
 // 改为0禁掉打印,1启用打印
-#define DEBUG 0
+#define DEBUG 1
 #define FORKSRV_FD 198
 #define MAX_LINE_LEN 1024
 
@@ -63,10 +63,17 @@ static unsigned int       cur_seed_length = 0;       //seed length
 static unsigned int       orig_seed_length = 0;       // seed length
 static unsigned int       readed_length = 0;    //length haved readed
 
+
+typedef int (*orig_close_type)(int);
+
+orig_close_type orig_close;
+
 static int      need_seed = 1;
 static FILE     *fp;
 
 struct epoll_event *ev;
+
+char *msg_buf = NULL;
 
 // 用于存储首次调用 getsockname 时的数据
 static struct sockaddr_storage saved_sock_addr;
@@ -83,7 +90,7 @@ void  read_from_afl();
 void get_length();
 void set_manual_cliaddr(struct sockaddr_in *cliaddr);
 int  get_shm_id();
-int  is_valid_socket(int fd);
+int  is_valid_fd(int fd);
 
 
 void          printHex(const char *buf, int len) {
@@ -161,6 +168,7 @@ __attribute__((constructor)) void hook_init() {
 
 __attribute__((constructor)) void hook_clean_up() {
   if (srv_fd > 0) { close(srv_fd); }
+  if (msg_buf != NULL) { free(msg_buf); }
   if (shared_memory!=NULL) {
       shmdt(shared_memory); 
   }
@@ -215,6 +223,8 @@ int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
   if (!orig_select) {
     orig_select = (orig_select_type)dlsym(RTLD_NEXT, "select");
   }
+
+  //printf("at select\n");
 
   if (accepted == 1) {
     if (readfds) {
@@ -312,6 +322,8 @@ recv(int sockfd, void *buf, size_t len, int flags) {
 
   int isNetworkSocket = sd_is_socket(sockfd, AF_UNSPEC, 0, 0);
 
+  printf("run at recv()\n");
+
   if (!isNetworkSocket) {
 
     printf("not network:%d\n", isNetworkSocket);
@@ -319,6 +331,8 @@ recv(int sockfd, void *buf, size_t len, int flags) {
     return original_recv(sockfd, buf, len, flags);
 
   }
+
+  //if (is_valid_fd(sockfd) <= 0) return 0;
 
   if (flag_recv == 0) {
 
@@ -366,8 +380,11 @@ recv(int sockfd, void *buf, size_t len, int flags) {
     }
 
     if (!shm_id)  shm_id = get_shm_id();
+
+     printf("shm_id:%d\n", shm_id);
     
      shared_memory = shmat(shm_id, NULL, 0);
+
 
     if (shared_memory == (void *)-1) {
 
@@ -415,7 +432,8 @@ recv(int sockfd, void *buf, size_t len, int flags) {
 
     int real_read = 0;
 
-    u32 offset = orig_seed_length - cur_seed_length+sizeof(size_t); //需要加上sizeof(size_t)是因为共享内
+    u32 offset = orig_seed_length - cur_seed_length + sizeof(size_t) +
+                 sizeof(int);  // 需要加上sizeof(size_t)是因为共享内
                                                                     //存开头表示的是长度，之后才是种子
     if (cur_seed_length == 0) {
 
@@ -473,14 +491,17 @@ recvfrom(int sockfd, void *buf, size_t len, int flags,
                            struct sockaddr *src_addr, socklen_t *addrlen) {
   if (!original_recvfrom) { original_recvfrom = dlsym(RTLD_NEXT, "recvfrom"); }
 
-  int check_valid = is_valid_socket(sockfd);
   // printf("%d\n", check_valid);
+  printf("at recvfrom()\n");
+
   int isNetworkSocket = sd_is_socket(sockfd, AF_UNSPEC, 0, 0);
 
   if (!isNetworkSocket) {
     printf("not network:%d\n", isNetworkSocket);
     return original_recvfrom(sockfd, buf, len, flags, src_addr, addrlen);
   }
+
+  //if (is_valid_fd(sockfd) <= 0) return 0;
 
   if (flag_recvfrom == 0) {
     char buffer[4];
@@ -515,7 +536,9 @@ recvfrom(int sockfd, void *buf, size_t len, int flags,
 
     shared_memory = shmat(shm_id, NULL, 0);
 
-    //printHex((char *)shared_memory, 5);
+    printf("shm_id:%d\n", shm_id);
+
+    printHex(((char *)shared_memory), orig_seed_length);
 
     if (shared_memory == (void *)-1) {
 
@@ -554,9 +577,10 @@ recvfrom(int sockfd, void *buf, size_t len, int flags,
 
     int real_read = 0;
 
+    printf("seed_length=%u\n", cur_seed_length);
 
-    u32 offset = orig_seed_length - cur_seed_length +
-                 sizeof(size_t);  // 需要加上sizeof(size_t)是因为共享内
+    u32 offset = orig_seed_length - cur_seed_length + sizeof(size_t) +
+                 sizeof(int);  // 需要加上sizeof(size_t)是因为共享内
                                   // 存开头表示的是长度，之后才是种子
 
     if (cur_seed_length == 0) {
@@ -624,6 +648,8 @@ ssize_t __attribute__((hot)) read(int fd, void *buf, size_t count) {
     return original_read(fd, buf, count);
   }
 
+  //if (is_valid_fd(fd) <= 0) return 0;
+
   if (flag_read == 0) {                                
     char    buffer[5];
     ssize_t ret = original_recv(fd, buffer, 4, MSG_PEEK | MSG_DONTWAIT);   //read没有peek需要借助recv
@@ -656,6 +682,8 @@ ssize_t __attribute__((hot)) read(int fd, void *buf, size_t count) {
 
    
     if (!shm_id) shm_id = get_shm_id();
+
+     printf("shm_id:%d\n", shm_id);
 
     shared_memory = shmat(shm_id, NULL, 0);
 
@@ -693,8 +721,10 @@ ssize_t __attribute__((hot)) read(int fd, void *buf, size_t count) {
 
     int real_read = 0;
 
-    u32 offset = orig_seed_length - cur_seed_length +
-                 sizeof(size_t);  // 需要加上sizeof(size_t)是因为共享内
+    printf("seed_length=%u\n", cur_seed_length);
+
+    u32 offset = orig_seed_length - cur_seed_length + sizeof(size_t) +
+                 sizeof(int);  // 需要加上sizeof(size_t)是因为共享内
                                   // 存开头表示的是长度，之后才是种子
     if (cur_seed_length == 0) {
       error_packet = 1;
@@ -747,7 +777,7 @@ ssize_t recvmsg(int sockfd, struct msghdr *msg, int flags) {
     original_recvmsg = (orig_recvmsg_func_type)dlsym(RTLD_NEXT, "recvmsg");
   }
 
-  int check_valid = is_valid_socket(sockfd);
+    printf("run at recvmsg()\n");
   // printf("%d\n", check_valid);
   // printf("recvmsg, msg.msg_iovlen=%ld, msg.msg_iov[0].iov_len=%ld \n",
   // msg->msg_iovlen,
@@ -758,6 +788,9 @@ ssize_t recvmsg(int sockfd, struct msghdr *msg, int flags) {
     // printf("not network:%d\n",isNetworkSocket);
     return original_recvmsg(sockfd, msg, flags);
   }
+
+  //if (is_valid_fd(sockfd) <= 0) return 0;
+
   if (flag_recvmsg == 0) {
     struct msghdr my_msg = {0};
     struct iovec  iov[1];
@@ -774,15 +807,14 @@ ssize_t recvmsg(int sockfd, struct msghdr *msg, int flags) {
     if (strncmp(buffer, "hook", 4) == 0) {
       printf("flag_recvmsg==1\n");
       flag_recvmsg = 1;
-      return 4;
     } else {
       return original_recvmsg(sockfd, msg, flags);
     }
   }
 
   if (flag_recvmsg == 1) {
+
     int need_length = 0;
-    int total_bytes_received = 0;
 
     if (first_read) {
       read_from_afl();  // 第一次需要从afl收到hook
@@ -799,6 +831,8 @@ ssize_t recvmsg(int sockfd, struct msghdr *msg, int flags) {
    
     if (!shm_id) shm_id = get_shm_id();
 
+    printf("shm_id:%d\n", shm_id);
+
     shared_memory = shmat(shm_id, NULL, 0);
 
     if (shared_memory == (void *)-1) {
@@ -809,6 +843,8 @@ ssize_t recvmsg(int sockfd, struct msghdr *msg, int flags) {
 
       return -1;
     }
+
+
 
 
     struct sockaddr_in target_addr;
@@ -842,7 +878,9 @@ ssize_t recvmsg(int sockfd, struct msghdr *msg, int flags) {
       len += msg->msg_iov[i].iov_len;
     }
 
-   char *buf = (char *)malloc(len);
+    printf("len=:%lu\n", len);
+
+   char *msg_buf = (char *)realloc(msg_buf,len);
 
   if (orig_seed_length > 0 && !need_length) {
 
@@ -871,23 +909,28 @@ ssize_t recvmsg(int sockfd, struct msghdr *msg, int flags) {
       need_length = 0;
    }
  
+     printHex((char *)shared_memory, orig_seed_length);
+
   int error_packet = 0;
 
   int real_read = 0; 
 
+  printf("seed_length=%u\n", orig_seed_length);
+
    u32 offset = orig_seed_length - cur_seed_length +
-               sizeof(size_t);  // 需要加上sizeof(size_t)是因为共享内
-                                // 存开头表示的是长度，之后才是种子
+               sizeof(size_t)+sizeof(int);  // 需要加上sizeof(size_t)是因为共享内
+                                            // 存开头表示的是长度，之后是port,之后才是种子
 
       if (cur_seed_length == 0) {
       error_packet = 1;
 
    } else if (cur_seed_length <= len) {  // 此时我们需要新的seed
 
-      memcpy(buf, shared_memory + offset, cur_seed_length);
+      memcpy(msg_buf, shared_memory + offset, cur_seed_length);
 
-
-      if (DEBUG) printHex(((char *)buf), cur_seed_length);
+      printf("msg_buf:\n");
+      printHex((char *)msg_buf, cur_seed_length);
+      
 
       real_read = cur_seed_length;
 
@@ -895,9 +938,10 @@ ssize_t recvmsg(int sockfd, struct msghdr *msg, int flags) {
 
    } else {  // len<seed_length
 
-      memcpy(buf, shared_memory + offset, len);
+      memcpy(msg_buf, shared_memory + offset, len);
 
-      if (DEBUG) printHex(((char *)buf), readed_length);
+       printf("msg_buf:\n");
+      printHex((char *)msg_buf, len);
 
       cur_seed_length -= (int)len;
 
@@ -907,8 +951,11 @@ ssize_t recvmsg(int sockfd, struct msghdr *msg, int flags) {
    if (DEBUG)
    printf("real read:%d\n", real_read);
 
-    msg->msg_iov->iov_base = buf;    
-    msg->msg_iov->iov_len = sizeof(buf); 
+    msg->msg_iov->iov_base = msg_buf;
+    msg->msg_iov->iov_len = len;
+
+
+     printHex((char *)msg->msg_iov->iov_base, real_read);
 
     if (real_read > 8096) {
       error_packet = 1;
@@ -954,7 +1001,7 @@ void read_from_afl() {
     //_exit(1);
   }
 
-    fcntl(FORKSRV_FD + 3, F_SETFL, O_NONBLOCK);
+   /* fcntl(FORKSRV_FD + 3, F_SETFL, O_NONBLOCK);
 
     while (1) {
     bytesRead = original_read(FORKSRV_FD + 3, buf, 1);
@@ -965,7 +1012,7 @@ void read_from_afl() {
     }
 
     }
-
+    */
 
    printf("read from afl success fd:%d\n",FORKSRV_FD+3);
 }
@@ -1071,9 +1118,9 @@ int accept4(int sockfd, struct sockaddr *addr, socklen_t *addrlen, int flags) {
    if (!orig_accept4) {
     orig_accept4 = (orig_accept4_type)dlsym(RTLD_NEXT, "accept4");
    }
-
+   if (!orig_close) { orig_close = (orig_close_type)dlsym(RTLD_NEXT, "close"); }
    if (srv_fd) { 
-       close(srv_fd);
+       orig_close(srv_fd);
    }
 
 
@@ -1088,9 +1135,8 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
     orig_accept = (orig_accept_type)dlsym(RTLD_NEXT, "accept");
    }
 
-   if (srv_fd) { 
-       close(srv_fd);
-   }
+   if (!orig_close) { orig_close = (orig_close_type)dlsym(RTLD_NEXT, "close"); }
+   if (srv_fd) { orig_close(srv_fd); }
 
     srv_fd = orig_accept(sockfd, addr, addrlen);
    first_read = 1;
@@ -1099,9 +1145,6 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
 }
 
 
-typedef int (*orig_close_type)(int);
-
-orig_close_type orig_close;
 /*
 int close(int fd) {
    if (fd == FORKSRV_FD + 3 || fd == FORKSRV_FD + 4) { return 0; }
@@ -1152,13 +1195,6 @@ int close(int fd) {
     return orig_close(fd);
    }
 
-int is_valid_socket(int fd) {
-  // 使用 F_GETFL 标志获取文件描述符状态
-  int flags = fcntl(fd, F_GETFL);
-
-  // 如果 fcntl 成功执行，说明文件描述符是有效的
-  return (flags != -1);
-}
 
 
 void set_manual_cliaddr(struct sockaddr_in * cliaddr) {
@@ -1244,7 +1280,7 @@ int get_shm_id() {
     write(FORKSRV_FD +11, shm_id_str, strlen(shm_id_str));  
     }
 
-    if (DEBUG) printf("shm_id:%d\n", atoi(shm_id_str));
+    //if (DEBUG) printf("shm_id:%d\n", atoi(shm_id_str));
 
     return atoi(shm_id_str);
    }
@@ -1376,3 +1412,56 @@ int fcntl(int fd, int cmd, ...) {
 
     if (fd == 10001) { return original_fcntl(fd, cmd, arg); }
 }*/
+   int is_valid_fd(int fd) {
+   
+       printf("fuzz fd:%d\n", fd);
+
+   if (!shm_id) shm_id = get_shm_id();
+
+    printf("shm_id:%d\n", shm_id);
+
+    shared_memory = shmat(shm_id, NULL, 0);
+
+    if (shared_memory == (void *)-1) {
+    perror("shmat failed");
+
+    return -1;
+    }
+
+     int shm_port;
+     
+     printHex(shared_memory ,sizeof(int));
+
+     memcpy(&shm_port, shared_memory +4 , sizeof(int));
+   
+    if (shmdt(shared_memory) == -1) {
+    perror("shmdt failed");
+
+    return -1;
+   }
+
+    struct sockaddr_in client_addr;
+   socklen_t          addr_len = sizeof(client_addr);
+
+    getpeername(fd, (struct sockaddr *)&client_addr, &addr_len);
+
+    char client_ip[INET_ADDRSTRLEN];
+
+    inet_ntop(AF_INET, &(client_addr.sin_addr), client_ip, INET_ADDRSTRLEN);
+
+    int fd_port = ntohs(client_addr.sin_port);
+    
+    printf("fd_port:%d\nshm_port:%d\n", fd_port, shm_port);
+
+    if (fd_port == shm_port) {
+
+
+        printf("its my fd\n");
+    return 1;  // 端口号相同，返回1
+    } else {
+    
+        printf("not my fd!!\n");
+        return 0;  // 端口号不同，返回0
+
+    }
+   }

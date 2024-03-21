@@ -1212,7 +1212,7 @@ u8   fuzz_one(afl_state_t *);
 void send_pre_packet(afl_state_t *afl);
 void write_to_num_file_by_len(afl_state_t *afl, u32 len);
 void copy_queue_entry_fields(struct queue_entry *dest, struct queue_entry *src);
-void send_tcp_hook();
+void send_tcp_hook(afl_forkserver_t *fsrv);
 void          get_id_by_filename(struct queue_entry *q);
 u32  find_len_by_id(u32 id, u32 queue_size, int queue_type);
 void write_to_num_file(afl_state_t *afl, struct queue_entry *q);

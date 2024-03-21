@@ -609,8 +609,8 @@ save_if_interesting(afl_state_t *afl, void *mem, u32 len, u8 fault) {
        successful. */
 
       //xzw:不要calibration
-    //res = calibrate_case(afl, afl->queue_top, mem, afl->queue_cycle - 1, 0);
-    res = FSRV_RUN_OK;
+    res = calibrate_case(afl, afl->queue_top, mem, afl->queue_cycle - 1, 0);
+    //res = FSRV_RUN_OK;
       if (unlikely(res == FSRV_RUN_ERROR)) {
         FATAL("Unable to execute target application");
       }
@@ -686,7 +686,7 @@ save_if_interesting(afl_state_t *afl, void *mem, u32 len, u8 fault) {
          the target with a more generous timeout (unless the default timeout
          is already generous). */
 
-      if (!use_net && afl->fsrv.exec_tmout <
+      if ( afl->fsrv.exec_tmout <
               afl->hang_tmout) {  // zyp changed, use_net 需要特别地处理超时
 
         u8  new_fault;

@@ -60,7 +60,7 @@ u8 punished_timeouts = 0;
 u32 equal_time = 0;
 
 u32 check_times = 0;
-u8         self_kill = 0;
+u8  self_kill = 0;
 u8  isdebug = 0;
 extern u8* num_filename;
 u8         have_disconnected = 0;
@@ -89,6 +89,108 @@ fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
 
 #endif
 
+   if (afl->debug) { isdebug = 1; }
+
+   int kill_sig;
+   
+  
+   if (fsrv->total_execs % 100 == 0 && fsrv->total_execs > 0) {
+    u32 udp_num = count_connections(fsrv, 1);
+    u32 tcp_num = count_connections(fsrv, 0);
+    if (isdebug) printf(" total num : % d \n", udp_num + tcp_num);
+    if (udp_num + tcp_num >= 50) {
+
+
+     if (fsrv->child_pid > 0) {
+        
+        kill_sig = kill(fsrv->child_pid, fsrv->child_kill_signal);
+        if (kill_sig==0) {
+          fsrv->child_pid = -1;
+        } else {
+        
+            printf("wrong at kill,kill_sig:%d\n", kill_sig);
+        }
+
+      }
+
+      self_kill = 1;
+
+      if (afl->debug)
+        printf("slef killed:%d\nkilled time:%lu\n", self_kill, ++kill_time);
+
+      check_times = 0;
+      ewma_avg = 100.0;
+      have_disconnected = 0;
+    }
+   }
+
+  if (ewma_enabled) {
+    pre_bitmap = test_bitmap_size;
+
+    if (first_state) {
+      ewma_avg = ewma((double)pre_bitmap, (double)test_bitmap_size, ewma_alpha);
+
+      first_state = 0;
+
+    } else {
+      ewma_avg = ewma(ewma_avg, (double)test_bitmap_size, ewma_alpha);
+    }
+
+    if ((ewma_avg < 10.1 || equal_time > 2000) &&
+        !self_kill) {  // need to check state
+
+      check_times++;
+
+      if (!have_disconnected) {
+
+        int len = -1;
+
+        memcpy(fsrv->shmem_fuzz, &len, sizeof(len));
+
+        int check_send;
+
+        if ((check_send = write(send_pipe[1], "HALO", 4)) < 0)
+
+          if (net_protocol) {
+            send_udp_hook(fsrv);
+          } else {
+            send_tcp_hook(fsrv);
+          }
+
+        ewma_avg = 100.0;
+
+        equal_time = 0;
+
+        have_disconnected = 1;
+
+      } else {
+
+        if (fsrv->child_pid > 0) {
+          kill_sig = kill(fsrv->child_pid, fsrv->child_kill_signal);
+          if (kill_sig==0) {
+            fsrv->child_pid = -1;
+          } else {
+            printf("wrong at kill,kill_sig:%d\n", kill_sig);
+          }
+        }
+
+        self_kill = 1;
+
+        if (afl->debug)
+
+          printf("slef killed:%d\nkilled time:%lu\n", self_kill, ++kill_time);
+
+        check_times = 0;
+
+        ewma_avg = 100.0;
+
+        have_disconnected = 0;
+
+        equal_time = 0;
+      }
+    }
+  }
+
       fsrv_run_result_t res =
           afl_fsrv_run_target(fsrv, timeout, &afl->stop_soon);
 
@@ -102,110 +204,16 @@ fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
  // 如果无法断开连接，或者断开之后发现服务器仍然被污染了，那么kill服务器
 
  
-     if (pre_bitmap == test_bitmap_size) {
+    /* if (pre_bitmap == test_bitmap_size) {
         //all time the bitmap is same is an odd thing
         equal_time++;
      } else {
         equal_time = 0;
-     }
-
- 
- if (afl->debug) { isdebug = 1; }
+     }*/
 
 
- if (ewma_enabled) {
-
-      if (fsrv->total_execs % 100 == 0 && fsrv->total_execs > 0 ) {
-          u32 udp_num = count_connections(fsrv, 1);
-          u32 tcp_num = count_connections(fsrv, 0);
-          if (isdebug) printf(" total num : % d \n", udp_num + tcp_num);
-          if (udp_num + tcp_num >= 50) {
-            s32 tmp_pid = fsrv->child_pid;
-            if (tmp_pid > 0) {
-              kill(tmp_pid, fsrv->child_kill_signal);
-              fsrv->child_pid = -1;
-            }
-
-            self_kill = 1;
-
-            if (afl->debug)
-              printf("slef killed:%d\nkilled time:%lu\n", self_kill,
-                     ++kill_time);
-
-            check_times = 0;
-            ewma_avg = 100.0;
-            have_disconnected = 0;
-          }
-        }
 
 
-        pre_bitmap = test_bitmap_size;
-
-        if (first_state) {
-          ewma_avg =
-              ewma((double)pre_bitmap, (double)test_bitmap_size, ewma_alpha);
-
-          first_state = 0;
-
-        } else {
-          ewma_avg = ewma(ewma_avg, (double)test_bitmap_size, ewma_alpha);
-        }
-
-        if ((ewma_avg < 10.1 || equal_time > 2000) &&
-            !self_kill) {  // need to check state
-
-          check_times++;
-
-          if (!have_disconnected) {
-
-            int len = -1;
-            memcpy(fsrv->shmem_fuzz, &len, sizeof(len));
-
-            int check_send;
-
-            //clear_pipe(send_pipe[0]);
-
-            //clear_pipe(FORKSRV_FD + 3);
-
-            if ((check_send = write(send_pipe[1], "HALO", 4)) < 0) {
-              //WARNF("Unable to write ");
-            }
-
-            if (net_protocol) {
-              send_udp_hook();
-            } else {
-              send_tcp_hook();
-            }
-
-            ewma_avg = 100.0;
-
-            have_disconnected = 1;
-
-          } else {
-            s32 tmp_pid = fsrv->child_pid;
-            if (tmp_pid > 0) {
-              kill(tmp_pid, fsrv->child_kill_signal);
-              fsrv->child_pid = -1;
-            }
-
-            self_kill = 1;
-
-            if (afl->debug)
-
-              printf("slef killed:%d\nkilled time:%lu\n", self_kill,
-                     ++kill_time);
-
-            check_times = 0;
-
-            ewma_avg = 100.0;
-
-            have_disconnected = 0;
-
-            equal_time = 0;
-          }
-        }
-
- }
 
 
  /*

@@ -1530,29 +1530,29 @@ afl_fsrv_write_to_testcase(afl_forkserver_t *fsrv, u8 *buf, size_t len) {
   }
 
 #endif
-  if (fsrv->debug) printf("fsrv ues shm?:%d\n", fsrv->use_shmem_fuzz);
+  //if (fsrv->debug) printf("fsrv ues shm?:%d\n", fsrv->use_shmem_fuzz);
   //modified by xzw :add support to shmem_fuzz
   if (likely(fsrv->use_shmem_fuzz)) {
 
-    if (unlikely(len + sizeof(len) > MAX_FILE)) len = MAX_FILE;
+    if (unlikely(len + sizeof(len) + sizeof(int) > MAX_FILE)) len = MAX_FILE;
 
-    // 首先，将测试用例的长度写入共享内存的起始位置
-    *fsrv->shmem_fuzz_len = len;
+  
+    *fsrv->shmem_fuzz_len = len; //xzw:写入长度
 
     if (fsrv->debug)
     printf("fuzz write len=%u\n" ,len);
 
-    memcpy(fsrv->shmem_fuzz, &len, sizeof(len));
-    // 然后，将测试用例数据复制到紧接长度信息之后的共享内存位置
-    memcpy(fsrv->shmem_fuzz + sizeof(len), buf, len);
 
-    if (fsrv->debug) { 
-        printf("fuzz write shm :%s", fsrv->shmem_fuzz);
-      for (int i = 0; i < len; i++) {
+    memcpy(fsrv->shmem_fuzz + sizeof(int), buf, len);
+
+
+  if (fsrv->debug) {
+      printf("fuzz write shm :%s", fsrv->shmem_fuzz);
+      for (int i = 0; i < 12; i++) {
         printf("%02X ", (unsigned char *)(fsrv->shmem_fuzz)[i]);
       }
-      printf("\n");
     }
+
     /*
   if (likely(fsrv->use_shmem_fuzz)) {
 
@@ -1652,6 +1652,8 @@ u32 reconnect_num = 1000;         // 多少input重连一次
 u32 socket_timeout_usecs = 1000;  // 连接的等待时间 in us
 u32 wait_after_send_one_usecs =
     10;  // 发送完一个种子中一块内容后的等待时间in us
+
+u8 need_new_conn = 0;
 u32 wait_after_sendusecs = 1;  // 发送完一个种子所有内容后的等待时间in us
 u32 new_start_server_waitusecs = 1000000;  // 重启服务器后的等待时间 in us
 u8 connecte_timeout = 0;
@@ -1765,7 +1767,7 @@ int connect_with_timeout(int sockfd, const struct sockaddr *addr,
 //xzw
 
 
-void send_udp_hook() {
+void send_udp_hook(afl_forkserver_t *fsrv) {
   int                sockfd;
   struct sockaddr_in servaddr;
   char               buffer[6] = "hook ";
@@ -1790,6 +1792,27 @@ void send_udp_hook() {
   servaddr.sin_family = AF_INET;
   servaddr.sin_port = htons(net_port);
   servaddr.sin_addr.s_addr = inet_addr(net_ip);
+
+   if (connect(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) {
+    perror("Connection failed");
+  }
+
+  struct sockaddr_in local_addr;
+  socklen_t  addr_len = sizeof(local_addr);
+  if (getsockname(sockfd, (struct sockaddr *)&local_addr, &addr_len) == -1) {
+    perror("getsockname failed");
+    //close(sockfd);
+    return;
+  }
+  int local_port = ntohs(local_addr.sin_port);
+
+  if (fsrv->debug)
+   printf("fuzz port:%d\n", local_port);
+
+  memcpy(fsrv->shmem_fuzz , &local_port, sizeof(int));  
+
+
+  //printf("fuzz write shm_port:%d\n", &local_port);
   // 发送UDP数据包
   int bytes_sent = sendto(sockfd, buffer, strlen(buffer), 0,
                           (struct sockaddr *)&servaddr, sizeof(servaddr));
@@ -1803,7 +1826,7 @@ void send_udp_hook() {
 // add
 
 
-void send_tcp_hook() {
+void send_tcp_hook(afl_forkserver_t *fsrv) {
   int  sockfd;
   char buffer[6] = "hook ";
   sockfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -1816,8 +1839,33 @@ void send_tcp_hook() {
   servaddr.sin_addr.s_addr = inet_addr(net_ip);
   if (connect_with_timeout(sockfd, (struct sockaddr *)&servaddr,
                            sizeof(servaddr), 1000) == -1) {
-    close(sockfd);
+
+    close(sockfd);//xzw: a kill maybe better?
+
     return;
+
+  } else {
+
+    struct sockaddr_in local_addr;
+    socklen_t          addr_len = sizeof(local_addr);
+    if (getsockname(sockfd, (struct sockaddr *)&local_addr, &addr_len) == -1) {
+      perror("Get local address failed");
+      close(sockfd);
+      return;
+    }
+    int local_port = ntohs(local_addr.sin_port);
+
+    //printf("fuzz port:%d\n", local_port);
+
+    memcpy(fsrv->shmem_fuzz , &local_port, sizeof(int)); //预留种子长度
+
+
+    if (fsrv->debug) {
+      printf("fuzz write shm :%s", fsrv->shmem_fuzz);
+      for (int i = 0; i < 12; i++) {
+        printf("%02X ", (fsrv->shmem_fuzz_len)[i]);
+      }
+    }
   }
   ssize_t bytes_sent = send(sockfd, buffer, strlen(buffer), 0);
   if (bytes_sent == -1) {
@@ -2118,8 +2166,11 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
   if (!use_net || (use_net && need_new_prog) ) {  // zyp
 
       //if (isdebug) printf("fuzz write to fsrv\n");
-    if ((res = write(fsrv->fsrv_ctl_fd, &write_value, 4)) != 4) {
+    if ((res = write_with_timeout(fsrv->fsrv_ctl_fd, &write_value, 4,5)) != 4) {
       if (*stop_soon_p) { return 0; }
+
+      printf("fsrv->child_pid:%d\n", fsrv->child_pid);
+
       RPFATAL(res, "Unable to request new process from fork server (OOM?)");
     }
 
@@ -2174,23 +2225,23 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
   if (is_new_start) {
     //usleep(new_start_server_waitusecs);
     if (net_protocol == 1) {
-      send_udp_hook();
+      send_udp_hook(fsrv);
     } else {
-      send_tcp_hook();
+      send_tcp_hook(fsrv);
     }
     // add connection
     // send hook
   }
   
   //xzw
-  /* if (use_net && need_send_pre_packet && !is_new_start) {
+  if (use_net && need_new_conn) {
     if (net_protocol == 1) {
-      send_udp_hook();
+      send_udp_hook(fsrv);
     } else {
-      send_tcp_hook();
-      
+      send_tcp_hook(fsrv);
     }
-  }*/
+    need_new_conn=0;
+  }
   
 
   if (use_net) {
@@ -2227,12 +2278,12 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
       exec_ms = read_s32_timed(recv_pipe[0], &dummyv, timeout, stop_soon_p);
       build_connect = 0;
     } else {
-      exec_ms = read_s32_timed(recv_pipe[0], &dummyv, 1, stop_soon_p);
+      exec_ms = read_s32_timed(recv_pipe[0], &dummyv, 2, stop_soon_p);
     
     }
 
 
-   //clear_pipe(recv_pipe[0]);
+    clear_pipe(recv_pipe[0]);
 
 
 
@@ -2240,12 +2291,13 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
     //printf("fuzz read:%d\n",dummyv);
 
      if ((int)dummyv == -1 || (int)dummyv == 842150450) {
-      if ((int)dummyv == 842150450) //printf("\nfuzz recv disconnect\n");
-      if (net_protocol == 1) {
+      if ((int)dummyv == 842150450)  // printf("\nfuzz recv disconnect\n");
+        /* if (net_protocol == 1) {
         send_udp_hook();
       } else {
         send_tcp_hook();
-      }
+      }*/
+        need_new_conn = 1;
     } 
 
      /* if (connecte_timeout) {
@@ -2256,27 +2308,6 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
      }*/
   
 
-
-
-
-    //read(recv_pipe[0], check_send, 4);
-    //printf("afl-fuzz read from hook success, exec_ms=%d\n", exec_ms);
-
-    // if ((check_send = read(recv_pipe[0], buf, 4)) != 4) {
-    //   WARNF("don't recv from hook ");
-    // }
-
-    /*char buf4[4];
-    int  res = 0;
-    if ((res = read(FORKSRV_FD + 3, buf4, 4)) < 0) {
-    perror("Don't recv hello?(OOM?)\n");
-    _exit(1);
-    }*/
-
-    // ADD END
-    // gettimeofday(&end, NULL);
-    // timer = (1000000 * (end.tv_sec - start.tv_sec) + end.tv_usec -
-    // start.tv_usec) / 1000; // in ms exec_ms = MAX(1,timer);
   } else {
     exec_ms = read_s32_timed(fsrv->fsrv_st_fd, &fsrv->child_status, timeout,
                              stop_soon_p);
@@ -2301,12 +2332,12 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
 
   // zyp
   // 如果timeout但是child进程没有crash，则重新发起一个新连接send hook即可
-   if (((use_net && exec_ms && build_connect) > timeout && !is_new_start)||(use_net && exec_ms>1 && !build_connect) ) {
+  if (((use_net && build_connect) && exec_ms > timeout && !is_new_start) || (use_net && exec_ms > 2 && !build_connect)) {
     fsrv->total_execs++;
     return FSRV_RUN_TMOUT;
   }
 
-      is_new_start = 0;
+  is_new_start = 0;
 
 
   if (!use_net) {

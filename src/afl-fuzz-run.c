@@ -44,12 +44,7 @@ u64 time_spent_working = 0;
 u32 test_bitmap_size;
 
 // xzw add for ewma
-double ewma_alpha = 0.20;  // alpha值
-double ewma_avg = 100.00;   // EWMA值
-double threshold = 10.00;  // 阈值
-u32 pre_bitmap = 0;
-u8    first_state = 1;
-u32     kill_time = 0;
+
 u8     dis_connect = 0;
 extern int send_pipe[1];
 extern int recv_pipe[1];
@@ -57,20 +52,13 @@ extern u8 net_protocol;
 
 u8 punished_timeouts = 0;
 
-u32 equal_time = 0;
-
-u32 check_times = 0;
-u8  self_kill = 0;
 u8  isdebug = 0;
 extern u8* num_filename;
-u8         have_disconnected = 0;
-u8         ewma_enabled = 0;
 
 
-// xzw add for ewma
-double ewma(double prev_avg, double value, double alpha) {
-  return alpha * value + (1 - alpha) * prev_avg;
-}
+extern u8 need_kill;
+
+
 
     fsrv_run_result_t __attribute__((hot))
 fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
@@ -91,196 +79,16 @@ fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
 
    if (afl->debug) { isdebug = 1; }
 
-   int kill_sig;
-   
-  
-   if (fsrv->total_execs % 100 == 0 && fsrv->total_execs > 0) {
-    u32 udp_num = count_connections(fsrv, 1);
-    u32 tcp_num = count_connections(fsrv, 0);
-    if (isdebug) printf(" total num : % d \n", udp_num + tcp_num);
-    if (udp_num + tcp_num >= 50) {
-
-
-     if (fsrv->child_pid > 0) {
-        
-        kill_sig = kill(fsrv->child_pid, fsrv->child_kill_signal);
-        if (kill_sig==0) {
-          fsrv->child_pid = -1;
-        } else {
-        
-            printf("wrong at kill,kill_sig:%d\n", kill_sig);
-        }
-
-      }
-
-      self_kill = 1;
-
-      if (afl->debug)
-        printf("slef killed:%d\nkilled time:%lu\n", self_kill, ++kill_time);
-
-      check_times = 0;
-      ewma_avg = 100.0;
-      have_disconnected = 0;
-    }
-   }
-
-  if (ewma_enabled) {
-    pre_bitmap = test_bitmap_size;
-
-    if (first_state) {
-      ewma_avg = ewma((double)pre_bitmap, (double)test_bitmap_size, ewma_alpha);
-
-      first_state = 0;
-
-    } else {
-      ewma_avg = ewma(ewma_avg, (double)test_bitmap_size, ewma_alpha);
-    }
-
-    if ((ewma_avg < 10.1 || equal_time > 2000) &&
-        !self_kill) {  // need to check state
-
-      check_times++;
-
-      if (!have_disconnected) {
-
-        int len = -1;
-
-        memcpy(fsrv->shmem_fuzz, &len, sizeof(len));
-
-        int check_send;
-
-        if ((check_send = write(send_pipe[1], "HALO", 4)) < 0)
-
-          if (net_protocol) {
-            send_udp_hook(fsrv);
-          } else {
-            send_tcp_hook(fsrv);
-          }
-
-        ewma_avg = 100.0;
-
-        equal_time = 0;
-
-        have_disconnected = 1;
-
-      } else {
-
-        if (fsrv->child_pid > 0) {
-          kill_sig = kill(fsrv->child_pid, fsrv->child_kill_signal);
-          if (kill_sig==0) {
-            fsrv->child_pid = -1;
-          } else {
-            printf("wrong at kill,kill_sig:%d\n", kill_sig);
-          }
-        }
-
-        self_kill = 1;
-
-        if (afl->debug)
-
-          printf("slef killed:%d\nkilled time:%lu\n", self_kill, ++kill_time);
-
-        check_times = 0;
-
-        ewma_avg = 100.0;
-
-        have_disconnected = 0;
-
-        equal_time = 0;
-      }
-    }
-  }
-
       fsrv_run_result_t res =
           afl_fsrv_run_target(fsrv, timeout, &afl->stop_soon);
 
-      //add
      test_bitmap_size = count_bytes(afl, afl->fsrv.trace_bits);
-
-//xzw added to check state
-//We check the state of the PUT by replaying the seeds that previously triggered new code coverage,
-//and if some of them still retain the original bitmap (or perform well), We believe that the test environment is not contaminated. 
-// xzw:服务器的状态可能被污染了，发送一个len=0的包试图断开连接，
- // 如果无法断开连接，或者断开之后发现服务器仍然被污染了，那么kill服务器
-
  
-    /* if (pre_bitmap == test_bitmap_size) {
-        //all time the bitmap is same is an odd thing
-        equal_time++;
-     } else {
-        equal_time = 0;
-     }*/
-
-
-
-
-
-
- /*
- if (fsrv->total_execs % 100000 == 0 && fsrv->total_execs > 0 && !self_kill &&
-     !have_disconnected) {  //A disconnect may be better
-    
-      int len = -1;
-    memcpy(fsrv->shmem_fuzz, &len, sizeof(len));
-
-    int check_send;
-
-    if ((check_send = write(send_pipe[1], "HALO", 4)) < 0) {
-      WARNF("Unable to write ");
-    }
-
-    if (net_protocol) {
-      send_udp_hook();
-    } else {
-      send_tcp_hook();
-    }
- 
- }
-
- if (fsrv->total_execs % 1000000 == 0 && fsrv->total_execs > 0 &&
-     !self_kill ) { // a kill may be better
-
-    s32 tmp_pid = fsrv->child_pid;
-    if (tmp_pid > 0) {
-      kill(tmp_pid, fsrv->child_kill_signal);
-      fsrv->child_pid = -1;
-    }
-
-    self_kill = 1;
-
-    if (afl->debug)
-      printf("slef killed:%d\nkilled time:%lu\n", self_kill, ++kill_time);
-    check_times = 0;
-    ewma_avg = 100.0;
-    have_disconnected = 0;
-    equal_time = 0;
- 
- }
-
-  if (afl->total_tmouts % 1000 == 0 && afl->total_tmouts > 0 &&
-     !self_kill) {  // a kill may be better
-
-    s32 tmp_pid = fsrv->child_pid;
-    if (tmp_pid > 0) {
-      kill(tmp_pid, fsrv->child_kill_signal);
-      fsrv->child_pid = -1;
-    }
-
-    self_kill = 1;
-
-    if (afl->debug)
-      printf("slef killed:%d\nkilled time:%lu\n", self_kill, ++kill_time);
-    check_times = 0;
-    ewma_avg = 100.0;
-    have_disconnected = 0;
-    equal_time = 0;
- }
- */
  if (afl->debug)
      printf("bitmap_size:%u\n", test_bitmap_size);
 
 
-
+     
 
 #ifdef PROFILING
   clock_gettime(CLOCK_REALTIME, &spec);
@@ -297,41 +105,7 @@ fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
 //xzw:mem就是包的buffer
 u8  *num_filename;  // zyp
 
-u32  count_connections(afl_forkserver_t * fsrv, int protocol){
-  char  path[256];
-  FILE *fp;
-  u32   count = 0;
-  char  buffer[1024];
 
-  // 根据协议类型选择正确的文件路径
-  if (protocol == 1) {
-      snprintf(path, sizeof(path), "/proc/%d/net/udp", fsrv->child_pid);
-  } else if (protocol == 0) {
-      snprintf(path, sizeof(path), "/proc/%d/net/tcp", fsrv->child_pid);
-  } else {
-      fprintf(stderr, "Invalid protocol type. Use 1 for UDP, 0 for TCP.\n");
-      return 0;
-  }
-  // 尝试打开文件
-  fp = fopen(path, "r");
-  if (fp == NULL) {
-    //perror("Unable to open file");
-    return 0;
-  }
-
-  if (fgets(buffer, sizeof(buffer), fp) == NULL) {
-    fclose(fp);
-    return -1;
-  }
-
-  while (fgets(buffer, sizeof(buffer), fp) != NULL) {
-    if (strlen(buffer) > 0) { count++; }
-  }
-
-  fclose(fp);
-
-  return count;  // 返回计数，不减1因为跳过了第一行标题
-}
 
 
 u32 __attribute__((hot)) 
@@ -1382,7 +1156,6 @@ common_fuzz_stuff(afl_state_t *afl, u8 *out_buf, u32 len) {
   }
 
   /* This handles FAULT_ERROR for us: */
-  //xzw:TODO
 
 
 

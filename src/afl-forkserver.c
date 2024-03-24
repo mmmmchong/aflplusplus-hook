@@ -1700,7 +1700,41 @@ int net_send(int sockfd, struct timeval timeout, char *mem, unsigned int len) {
 }
 // add
 
+u32 count_connections(afl_forkserver_t *fsrv, int protocol) {
+  char  path[256];
+  FILE *fp;
+  u32   count = 0;
+  char  buffer[1024];
 
+  // 根据协议类型选择正确的文件路径
+  if (protocol == 1) {
+    snprintf(path, sizeof(path), "/proc/%d/net/udp", fsrv->child_pid);
+  } else if (protocol == 0) {
+    snprintf(path, sizeof(path), "/proc/%d/net/tcp", fsrv->child_pid);
+  } else {
+    fprintf(stderr, "Invalid protocol type. Use 1 for UDP, 0 for TCP.\n");
+    return 0;
+  }
+  // 尝试打开文件
+  fp = fopen(path, "r");
+  if (fp == NULL) {
+    // perror("Unable to open file");
+    return 0;
+  }
+
+  if (fgets(buffer, sizeof(buffer), fp) == NULL) {
+    fclose(fp);
+    return -1;
+  }
+
+  while (fgets(buffer, sizeof(buffer), fp) != NULL) {
+    if (strlen(buffer) > 0) { count++; }
+  }
+
+  fclose(fp);
+
+  return count;  // 返回计数，不减1因为跳过了第一行标题
+}
 
 int set_nonblocking(int sockfd) {
   int flags = fcntl(sockfd, F_GETFL, 0);
@@ -1984,6 +2018,11 @@ u8 exist_pid(int pid) {
   }
 }
 
+// xzw add for ewma
+double ewma(double prev_avg, double value, double alpha) {
+  return alpha * value + (1 - alpha) * prev_avg;
+}
+
 int clear_pipe(int fd) {
 
     if (fd <= 0)  return -1;
@@ -2064,12 +2103,26 @@ ssize_t read_with_timeout(int fd, void *buf, size_t count) {
 /* Execute target application, monitoring for timeouts. Return status
    information. The called program will update afl->fsrv->trace_bits. */
 //xzw; 如果需要重新连接即send_tcp_hook，我们需要重新发送pre包
-u8 need_send_pre_packet = 0;
-extern u8 self_kill;
-u8        stupid_double_check = 0;
+
+u8        need_kill=0;
+
 extern u8 dis_connect;
 u8        build_connect = 1;  //1 need to build coneection, else 0
 u8        is_new_start;
+
+u8        ewma_enabled = 0;
+u32       test_bitmap_size;
+
+u32 timeout_times = 0;
+
+u8     first_state = 1;
+u32    check_times = 0;
+u8     have_disconnected = 0;
+double ewma_alpha = 0.20;  // alpha值
+double ewma_avg = 100.00;  // EWMA值
+double threshold = 10.00;  // 阈值
+u32    pre_bitmap = 0;
+
 fsrv_run_result_t __attribute__((hot))
 afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
                     volatile u8 *stop_soon_p) {
@@ -2229,8 +2282,6 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
     } else {
       send_tcp_hook(fsrv);
     }
-    // add connection
-    // send hook
   }
   
   //xzw
@@ -2255,22 +2306,18 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
     char buf[4];
     u8   double_check = 0;
     //clear_pipe(send_pipe[0]);
-    
-     //if (isdebug) printf("fuzz write HALO\n");
 
      if ((check_send = write_with_timeout(send_pipe[1], "HALO", 4,1)) < 0) {
-      //if ((check_send = write(send_pipe[1], "HALO", 4)) < 0) {
-        //WARNF("Unable to write ");
+
       int check = 1;
       do {
         check = read_with_timeout(send_pipe[0], buf, 1);
       } while (check > 0);
-      //clear_pipe(FORKSRV_FD + 3);
-      }
-      //if (isdebug) { printf("Write Hello to hook\n"); }
+     }
 
     //exec_ms = 1;
     // 改为处理完当前种子hook端再向fuzzer发消息，因此这里同样需要等待完成
+
     u32 dummyv = 0;
 
 
@@ -2278,34 +2325,17 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
       exec_ms = read_s32_timed(recv_pipe[0], &dummyv, timeout, stop_soon_p);
       build_connect = 0;
     } else {
-      exec_ms = read_s32_timed(recv_pipe[0], &dummyv, 2, stop_soon_p);
+      exec_ms = read_s32_timed(recv_pipe[0], &dummyv, 1, stop_soon_p);
     
     }
 
-
     clear_pipe(recv_pipe[0]);
 
-
-
-   // if (isdebug)
-    //printf("fuzz read:%d\n",dummyv);
-
-     if ((int)dummyv == -1 || (int)dummyv == 842150450) {
-      if ((int)dummyv == 842150450)  // printf("\nfuzz recv disconnect\n");
-        /* if (net_protocol == 1) {
-        send_udp_hook();
-      } else {
-        send_tcp_hook();
-      }*/
+     if ((int)dummyv == -1 || (int)dummyv == 842150450) { //fuzz recv disconnect
+      if ((int)dummyv == 842150450)  
         need_new_conn = 1;
     } 
 
-     /* if (connecte_timeout) {
-      if ((check_send = write(send_pipe[1], "HALO", 4)) < 0) {
-        WARNF("Unable to write ");
-      }
-      connecte_timeout = 0;
-     }*/
   
 
   } else {
@@ -2313,49 +2343,135 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
                              stop_soon_p);
   }
 
-  // zyp
+  if (fsrv->total_execs % 100 == 0 && fsrv->total_execs > 0) {
+    u32 udp_num = count_connections(fsrv, 1);
+    u32 tcp_num = count_connections(fsrv, 0);
+
+    if (udp_num + tcp_num >= 50) need_kill = 1;
+
+    //printf("con count killed\n");
+
+  }
+
+   if (ewma_enabled) {
+    
+    u32 *ptr = (u32 *)fsrv->trace_bits;
+    u32  i = ((fsrv->real_map_size + 3) >> 2);
+    u32  ret = 0;
+
+    while (i--) {
+      u32 v = *(ptr++);
+
+      if (likely(!v)) { continue; }
+      if (v & 0x000000ffU) { ++ret; }
+      if (v & 0x0000ff00U) { ++ret; }
+      if (v & 0x00ff0000U) { ++ret; }
+      if (v & 0xff000000U) { ++ret; }
+    }
+
+    pre_bitmap = ret;
+
+
+    if (first_state) {
+      ewma_avg = ewma((double)pre_bitmap, (double)test_bitmap_size, ewma_alpha);
+
+      first_state = 0;
+
+    } else {
+      ewma_avg = ewma(ewma_avg, (double)test_bitmap_size, ewma_alpha);
+    }
+
+    if (ewma_avg < 10.1 && !need_kill ) {  // need to check state
+                                                                             
+       //if (!have_disconnected) {
+        int len = -1;
+
+        memcpy(fsrv->shmem_fuzz_len, &len, sizeof(len));
+
+        int check_send;
+
+        if ((check_send = write(send_pipe[1], "HALO", 4)) < 0)
+
+          if (net_protocol) {
+            send_udp_hook(fsrv);
+          } else {
+            send_tcp_hook(fsrv);
+          }
+
+        check_times += 1;
+
+        ewma_avg = 100.0;
+
+       /* have_disconnected = 1;
+
+         //fsrv->total_execs++;
+
+        //return FSRV_RUN_TMOUT;
+
+      }  else {
+
+        need_kill = 1;
+
+        ewma_avg = 100.0;
+
+        have_disconnected = 0;
+
+        printf("ewma killed\n");
+      }*/
+    }
+  }
+
+   if (!need_kill && check_times == 1000 ){//||  !need_kill && timeout_times%1000==0) { 
+       need_kill = 1;
+        check_times = 0;
+   }
+
+   /* if (fsrv->total_execs > 0 && fsrv->total_execs % 100000 == 0 &&
+            !need_kill) {
+    printf("exec kill\n");
+    //need_kill = 1;
+  }*/
+
+
+
+
   if (use_net && !exist_pid(fsrv->child_pid) ) { 
       fsrv->total_execs++;
-    ///if (isdebug)
-      //printf("is self killed?:%d\n", self_kill);
-      if (!self_kill) {
-      return FSRV_RUN_CRASH;
-      } else {
-      self_kill = 0;
-      }
-     
-
-      
+      if (!need_kill)   return FSRV_RUN_CRASH;   
   }
 
 
 
   // zyp
   // 如果timeout但是child进程没有crash，则重新发起一个新连接send hook即可
-  if (((use_net && build_connect) && exec_ms > timeout && !is_new_start) || (use_net && exec_ms > 2 && !build_connect)) {
+  if (((use_net && build_connect) && exec_ms > timeout && !is_new_start) || (use_net && exec_ms > 1 && !build_connect)) {
     fsrv->total_execs++;
+      timeout_times++;
     return FSRV_RUN_TMOUT;
   }
 
   is_new_start = 0;
 
 
-  if (!use_net) {
-    if (exec_ms > timeout) {
+  if (!use_net || (use_net && need_kill)) {
+    if (exec_ms > timeout || need_kill) {
       /* If there was no response from forkserver after timeout seconds,
       we kill the child. The forkserver should inform us afterwards */
 
       s32 tmp_pid = fsrv->child_pid;
+      
       if (tmp_pid > 0) {
-        kill(tmp_pid, fsrv->child_kill_signal);
+          kill(tmp_pid, SIGTERM);
         fsrv->child_pid = -1;
       }
 
       fsrv->last_run_timed_out = 1;
 
-
       if (read(fsrv->fsrv_st_fd, &fsrv->child_status, 4) < 4) { exec_ms = 0; }
+    
+      
     }
+    
   }
 
   if (!exec_ms) {
@@ -2412,6 +2528,7 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
   if (unlikely(fsrv->last_run_timed_out)) {
 
     fsrv->last_kill_signal = fsrv->child_kill_signal;
+    timeout_times++;
     return FSRV_RUN_TMOUT;
 
   }
@@ -2422,7 +2539,7 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
   abort_on_error. On top, a user may specify a custom AFL_CRASH_EXITCODE.
   Handle all three cases here. */
 
-  if (unlikely(
+  if (unlikely( 
           /* A normal crash/abort */
           (WIFSIGNALED(fsrv->child_status)) ||
           /* special handling for msan and lsan */
@@ -2467,12 +2584,12 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
 #endif
 
     /* For a proper crash, set last_kill_signal to WTERMSIG, else set it to 0 */
-    fsrv->last_kill_signal =
-        WIFSIGNALED(fsrv->child_status) ? WTERMSIG(fsrv->child_status) : 0;
-    return FSRV_RUN_CRASH;
-
+      fsrv->last_kill_signal =
+          WIFSIGNALED(fsrv->child_status) ? WTERMSIG(fsrv->child_status) : 0;
+      // printf("crash hererer\n");
+      return FSRV_RUN_CRASH;
   }
-
+  need_kill = 0;
   /* success :) */
   return FSRV_RUN_OK;
 
